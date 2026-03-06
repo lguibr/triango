@@ -12,3 +12,15 @@ The `core` module forms the bedrock of the Tricrack mathematical engine. It mana
 
 ## Performance Philosophy
 While a visual Tricrack game features variable geometry, the mathematically defined internal playable triangles span precisely 96 vertices. Caching this inside standard array sizes allows Go to perfectly layout structures ensuring cache-line alignment and extreme memory locality.
+
+## Scoring Rules
+
+Triango relies on standard tile-placement score maximizing formulas identical to 1010! mechanics:
+- **Placement Points:** Every time a piece is legally placed, you are instantly awarded `1 Point` per triangle occupying the piece configuration (e.g., placing the 6-triangle Hexagon shape instantly awards 6 points).
+- **Line Completion Bonus:** If your placement causes any of the 24 internal absolute axes to form a fully unbroken line (Horizontal, Red Diagonal Up-Right, or Black Diagonal Up-Left), the line completely collapses.
+  - You are awarded **`2 Points`** for every single triangle erased inside the collapsing geometric line masks.
+
+## AlphaZero Dataset Architecture
+
+Triango is architected to be the backbone of a deep Reforcement Learning network. 
+The core state emits dense, non-lossy `[96]int8` binary arrays representing exact positional data along with perfectly tracked legal geometric sub-state. This exact schema guarantees PyTorch Tensors natively digest 2D features mapping $V$ (Score) and $P$ (MCTS Visit Volume) sequentially.

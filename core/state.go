@@ -79,12 +79,8 @@ func (s GameState) ApplyMove(pieceSlot int, boardIndex int) (GameState, bool) {
 		// Clear the triangles forming the full lines
 		next.Board = next.Board.AndNot(clearedMask)
 
-		// Bonus points for line clears. Standard 1010! mechanics give +10 per line,
-		// and combo escalations for multiple lines.
-		next.Score += linesCleared * 10
-		if linesCleared > 1 {
-			next.Score += (linesCleared - 1) * 5 // Combo bonus
-		}
+		// Bonus points for line clears. 2 Points per triangle that was collapsed!
+		next.Score += clearedMask.PopCount() * 2
 	}
 
 	// 5. Terminal Check (can any of the remaining pieces be legally placed?)

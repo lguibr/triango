@@ -75,7 +75,7 @@ type ThreadResult struct {
 
 // ParallelSearch uses root parallelization to build multiple independent MCTS trees
 // totally lock-free and merges the visit counts at the root level asynchronously.
-func ParallelSearch(rootState core.GameState, config SearchConfig) Move {
+func ParallelSearch(rootState core.GameState, config SearchConfig) (Move, map[Move]int) {
 	if config.Threads <= 0 {
 		config.Threads = 1
 	}
@@ -147,5 +147,5 @@ func ParallelSearch(rootState core.GameState, config SearchConfig) Move {
 		}
 	}
 
-	return bestMove
+	return bestMove, mergedVisits
 }

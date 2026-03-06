@@ -9,6 +9,13 @@ import (
 )
 
 func main() {
+	recorder, err := mcts.NewRecorder("data/games.jsonl")
+	if err != nil {
+		fmt.Printf("Failed to init recorder: %v\n", err)
+		return
+	}
+	defer recorder.Close()
+
 	rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
 	s := core.NewGameState([3]int8{
 		mcts.RandomPiece(rnd),
@@ -50,8 +57,10 @@ func main() {
 		// MCTS Think
 		fmt.Printf("Thinking (Simulations: %d on %d cores)...\n", cfg.Simulations, cfg.Threads)
 		start := time.Now()
-		bestMove := mcts.ParallelSearch(s, cfg)
+		bestMove, visits := mcts.ParallelSearch(s, cfg)
 		elapsed := time.Since(start)
+
+		recorder.RecordStep(s, visits)
 
 		p := core.StandardPieces[s.AvailablePieces[bestMove.PieceSlot]]
 		fmt.Printf("\n-> Agent placed [%s%s%s] piece at index %d (took %v)\n", p.ANSIColor, p.ColorName, core.ANSIReset, bestMove.BoardIndex, elapsed)
@@ -81,4 +90,10 @@ func main() {
 	fmt.Printf("=== GAME OVER ===\nFinal Score: %d\n", s.Score)
 	fmt.Println("Final Board:")
 	fmt.Println(core.PrintBoardColored(s.Board, &boardColors))
+
+	if err := recorder.FlushGame(s.Score); err != nil {
+		fmt.Printf("Failed to flush dataset: %v\n", err)
+	} else {
+		fmt.Printf("Successfully saved self-play record to data/games.jsonl!\n")
+	}
 }

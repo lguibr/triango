@@ -29,22 +29,22 @@ func TestStateTransition(t *testing.T) {
 	}
 
 	// Valid Move 2: Place Double Triangle.
-	// As defined in pieces.go, a Double Triangle is an UP origin and its RIGHT DOWN neighbor.
-	// Index 2 is UP. Let's place it at index 2 (Row 0, Col 2).
-	if !IsUp(0, 2) {
-		t.Fatalf("Index 2 is not UP")
+	// As defined in pieces.go, StandardPiece[1] is a Down triangle.
+	// Index 1 is DOWN. Let's place it at index 1 (Row 0, Col 1).
+	if IsUp(0, 1) {
+		t.Fatalf("Index 1 is UP, but piece 1 requires DOWN")
 	}
-	s3, valid2 := s2.ApplyMove(1, 2)
+	s3, valid2 := s2.ApplyMove(1, 1)
 	if !valid2 {
-		t.Fatalf("Failed to place double triangle at index 2")
+		t.Fatalf("Failed to place double triangle at index 1")
 	}
 
-	if s3.Score != 3 { // 1 existing + 2 for the double
-		t.Errorf("Expected score 3, got %d", s3.Score)
+	if s3.Score != 2 { // 1 existing + 1 for the Single Down
+		t.Errorf("Expected score 2, got %d", s3.Score)
 	}
 
-	if s3.Board.PopCount() != 3 {
-		t.Errorf("Expected board to have 3 bits set, has: %d", s3.Board.PopCount())
+	if s3.Board.PopCount() != 2 {
+		t.Errorf("Expected board to have 2 bits set, has: %d", s3.Board.PopCount())
 	}
 
 	// Since PiecesLeft == 0 now, what is terminal state?

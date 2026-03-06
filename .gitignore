@@ -1,0 +1,87 @@
+# =========================
+#  Triango Global Ignore
+# =========================
+
+# --- Triango Datasets ---
+# The MCTS dataset streams get massive quickly. Do not commit these.
+/data/
+*.jsonl
+*.pb
+/python/models/
+*.pth
+*.pt
+
+# --- Go ---
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# --- Python ---
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyTorch / Machine Learning
+# Logs and checkpoints
+/python/runs/
+.cache/
+
+# Environments
+venv/
+.env/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# --- macOS ---
+# General
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Icon must end with two \r
+Icon
+
+# Thumbnails
+._*
+
+# Files that might appear in the root of a volume
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Directories potentially created on remote AFP share
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# --- IDEs / Editors ---
+.vscode/
+.idea/
+*.swp
+*.swo

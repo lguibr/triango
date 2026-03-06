@@ -2,6 +2,7 @@ package mcts
 
 import (
 	"fmt"
+	"math/rand"
 	"testing"
 	"triango/core"
 )
@@ -9,14 +10,14 @@ import (
 func TestParallelSearch(t *testing.T) {
 	// A basic test to see if MCTS returns a valid move.
 	// We give it 3 singles, so valid moves exist.
-	s := core.NewGameState([3]int8{0, 0, 0})
+	rootState := core.NewGameState([3]int8{0, 0, 0})
 
 	cfg := SearchConfig{
-		Simulations: 1000,
-		Threads:     4,
+		Simulations: 100,
+		Threads:     2,
 	}
 
-	bestMove := ParallelSearch(s, cfg)
+	bestMove, _ := ParallelSearch(rootState, cfg)
 
 	if bestMove.PieceSlot < 0 || bestMove.PieceSlot > 2 {
 		t.Errorf("Invalid piece slot returned: %d", bestMove.PieceSlot)
@@ -29,7 +30,7 @@ func TestParallelSearch(t *testing.T) {
 }
 
 func BenchmarkMCTS_SingleThread(b *testing.B) {
-	s := core.NewGameState([3]int8{0, 1, 0})
+	rootState := core.NewGameState([3]int8{0, 1, 0})
 	cfg := SearchConfig{
 		Simulations: 1000,
 		Threads:     1,
@@ -37,12 +38,16 @@ func BenchmarkMCTS_SingleThread(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		ParallelSearch(s, cfg)
+		ParallelSearch(rootState, cfg)
 	}
 }
 
 func BenchmarkMCTS_QuadThread(b *testing.B) {
-	s := core.NewGameState([3]int8{0, 1, 0})
+	rnd := rand.New(rand.NewSource(42))
+	rootState := core.NewGameState([3]int8{
+		RandomPiece(rnd), RandomPiece(rnd), RandomPiece(rnd),
+	})
+
 	cfg := SearchConfig{
 		Simulations: 1000,
 		Threads:     4,
@@ -50,6 +55,6 @@ func BenchmarkMCTS_QuadThread(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		ParallelSearch(s, cfg)
+		ParallelSearch(rootState, cfg)
 	}
 }

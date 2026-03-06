@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// It formats the hexagon properly.
+func printMonochrome(b Bitboard) string {
 	var sb strings.Builder
 	for r := 0; r < 8; r++ {
 		// Padding for visual alignment
