@@ -6,13 +6,14 @@ import numpy as np
 import random
 import time
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 from env import GameState, TOTAL_TRIANGLES
-from mcts import PythonMCTS, extract_feature
+from mcts import PythonMCTS, AsyncEvaluator, extract_feature
 from model import AlphaZeroNet
 
 class ReplayBuffer(Dataset):
-    def __init__(self, capacity=10000):
+    def __init__(self, capacity=50000):
         self.capacity = capacity
         self.buffer = []
         
@@ -30,52 +31,57 @@ class ReplayBuffer(Dataset):
         self.buffer.append((state_tensor, policy_array, value))
 
 
+def play_one_game(game_idx, mcts, simulations, num_games):
+    state = GameState()
+    game_history = []
+    
+    print(f"--- Game {game_idx+1}/{num_games} Started ---")
+    
+    step = 0
+    while not state.terminal:
+        if state.pieces_left == 0:
+            state.refill_tray()
+            if state.terminal:
+                break
+                
+        best_move, visits = mcts.search(state, simulations=simulations)
+        
+        # Policy Target Distribution
+        policy = np.zeros(TOTAL_TRIANGLES, dtype=np.float32)
+        total_visits = sum(visits.values())
+        for move, v in visits.items():
+            slot, idx = move
+            policy[idx] += v / total_visits
+            
+        feat = extract_feature(state)
+        game_history.append((feat.clone().detach(), policy))
+        
+        # Apply move
+        slot, idx = best_move
+        state = state.apply_move(slot, idx)
+        
+        # Only render Game 1 to prevent interleaved multithreading terminal spam
+        if game_idx == 0:
+            state.render()
+            
+        step += 1
+        
+    print(f"Game {game_idx+1} Finished. Steps: {step}, Final Score: {state.score}")
+    return game_history, state.score
+
 def self_play(mcts, num_games=10, simulations=100):
     buffer = ReplayBuffer()
-    device = mcts.device
     
-    for game in range(num_games):
-        state = GameState()
-        game_history = []
+    # Launch massive 32 concurrent games!
+    with ThreadPoolExecutor(max_workers=32) as executor:
+        futures = [executor.submit(play_one_game, i, mcts, simulations, num_games) for i in range(num_games)]
         
-        print(f"--- Game {game+1}/{num_games} Started ---")
-        
-        step = 0
-        while not state.terminal:
-            if state.pieces_left == 0:
-                state.refill_tray()
-                if state.terminal:
-                    break
-                    
-            best_move, visits = mcts.search(state, simulations=simulations)
-            
-            # Policy Target Distribution
-            policy = np.zeros(TOTAL_TRIANGLES, dtype=np.float32)
-            total_visits = sum(visits.values())
-            for move, v in visits.items():
-                slot, idx = move
-                policy[idx] += v / total_visits
+        for future in futures:
+            history, final_score = future.result()
+            # Retroactively assign the final score
+            for (feat, policy) in history:
+                buffer.push(feat, policy, float(final_score))
                 
-            # Store state snapshot for replay buffer
-            # Note: For strict identicality to AZ, we should store all symmetries (Rotate120/Rotate240) here. 
-            # Skipping augmentation for pure simplicity in V1 Python port.
-            feat = extract_feature(state)
-            
-            # Send feature numpy array equivalent directly back to MPS device
-            game_history.append((feat.clone().detach(), policy))
-            
-            # Apply move
-            slot, idx = best_move
-            state = state.apply_move(slot, idx)
-            step += 1
-            
-        print(f"Game {game+1} Finished. Steps: {step}, Final Score: {state.score}")
-        
-        # Retroactively assign the final score as the Value to all states in the history
-        # (Standard AlphaZero often uses +1/-1, but Triango uses pure Score)
-        for (feat, policy) in game_history:
-            buffer.push(feat, policy, float(state.score))
-            
     return buffer
 
 def train(model, buffer, device, epochs=5, batch_size=32):
@@ -125,7 +131,7 @@ def train(model, buffer, device, epochs=5, batch_size=32):
               f"Total Loss: {total_loss:.4f} (Policy: {policy_loss_sum:.4f}, Value: {value_loss_sum:.4f})")
               
 def main():
-    device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu'))
     print(f"Booting pure Python AlphaZero ecosystem on: {device}")
     
     model = AlphaZeroNet().to(device)
@@ -136,18 +142,24 @@ def main():
         model.load_state_dict(torch.load(checkpoint, map_location=device))
         print("Loaded checkpoint.")
         
-    mcts = PythonMCTS(model, device)
-    
     ITERATIONS = 50
     for i in range(ITERATIONS):
         print(f"\n================ Iteration {i+1}/{ITERATIONS} ================")
         model.eval()
         
+        # Fresh Async Evaluator ensures background PyTorch batches
+        evaluator = AsyncEvaluator(model, device, batch_size=32)
+        mcts = PythonMCTS(evaluator)
+        
         start = time.time()
-        buffer = self_play(mcts, num_games=5, simulations=50) # Extremely fast Python logic
+        # Increased games for heavy batching scale-out
+        buffer = self_play(mcts, num_games=32, simulations=800) 
         print(f"Self-play generated {len(buffer)} states in {time.time() - start:.2f}s")
         
-        train(model, buffer, device, epochs=5, batch_size=32)
+        evaluator.running = False # Kill background thread
+        
+        # Larger batch size and epochs for faster, deeper learning
+        train(model, buffer, device, epochs=10, batch_size=128)
         
         # Save SOTA
         os.makedirs("models", exist_ok=True)

@@ -2,6 +2,8 @@ import math
 import random
 import torch
 import numpy as np
+import threading
+from queue import Queue, Empty
 
 from env import GameState, STANDARD_PIECES, TOTAL_TRIANGLES
 
@@ -88,10 +90,76 @@ def extract_feature(state: GameState) -> torch.Tensor:
     feature[3, 0] = state.available[2]
     return feature
 
-class PythonMCTS:
-    def __init__(self, model, device):
+class AsyncEvaluator:
+    def __init__(self, model, device, batch_size=32, timeout=0.01):
         self.model = model
         self.device = device
+        self.batch_size = batch_size
+        self.timeout = timeout
+        
+        self.queue = Queue()
+        self.running = True
+        
+        self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
+        self.worker_thread.start()
+        
+    def predict(self, feature: torch.Tensor):
+        condition = threading.Condition()
+        result = {}
+        
+        with condition:
+            self.queue.put((feature, condition, result))
+            condition.wait()
+            
+        return result['policy'], result['value']
+        
+    def _worker_loop(self):
+        while self.running:
+            batch = []
+            
+            try:
+                # Wait for at least one item
+                item = self.queue.get(timeout=0.1)
+                batch.append(item)
+                
+                # Try to fill the rest of the batch quickly
+                while len(batch) < self.batch_size:
+                    try:
+                        next_item = self.queue.get(timeout=self.timeout)
+                        batch.append(next_item)
+                    except Empty:
+                        break
+                        
+            except Empty:
+                continue
+            
+            if not batch:
+                continue
+                
+            # Unpack items
+            features = [item[0] for item in batch]
+            conditions = [item[1] for item in batch]
+            results = [item[2] for item in batch]
+            
+            # Form tensor batch -> Evaluate
+            batch_tensor = torch.stack(features).to(self.device)
+            with torch.no_grad():
+                policies, values = self.model(batch_tensor)
+                policies = torch.exp(policies).cpu().numpy()
+                values = values.cpu().numpy()
+                
+            # Distribute results and wake up waiting threads
+            for i in range(len(batch)):
+                res = results[i]
+                res['policy'] = policies[i]
+                res['value'] = float(values[i][0])
+                
+                with conditions[i]:
+                    conditions[i].notify()
+
+class PythonMCTS:
+    def __init__(self, evaluator: AsyncEvaluator):
+        self.evaluator = evaluator
         
     def add_dirichlet_noise(self, node: Node):
         if not node.children: return
@@ -109,11 +177,9 @@ class PythonMCTS:
         while not root.expanded:
             root.expand()
             
-        # Neural Evaluation for root
-        features = extract_feature(root.state).unsqueeze(0).to(self.device)
-        with torch.no_grad():
-            policy, value = self.model(features)
-            policy = torch.exp(policy).cpu().numpy()[0]
+        # Neural Evaluation for root using Async Evaluator
+        features = extract_feature(root.state)
+        policy, value = self.evaluator.predict(features)
             
         for child in root.children:
             slot, idx = child.move
@@ -133,17 +199,11 @@ class PythonMCTS:
             if not node.state.terminal and not node.expanded:
                 node = node.expand()
                 
-            # Evaluate Leaf Natively
-            feat = extract_feature(node.state).unsqueeze(0).to(self.device)
-            with torch.no_grad():
-                poli, val = self.model(feat)
-                poli = torch.exp(poli).cpu().numpy()[0]
-                
-                # val shape is [1, 1], so we unpack the first batch, first channel
-                val = val[0, 0].item()
+            # Evaluate Leaf Async
+            feat = extract_feature(node.state)
+            poli, val = self.evaluator.predict(feat)
                 
             # Propagate NN Priors to this new leaf's eventual children
-            # (In standard AZ, expanding unifies with eval)
             if node != root and node.move is not None:
                 slot, idx = node.move
                 node.prior = float(poli[idx])

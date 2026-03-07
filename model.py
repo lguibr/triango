@@ -9,7 +9,7 @@ class AlphaZeroNet(nn.Module):
     treats the 96 triangles as discrete tokens, natively learning their 
     hexagonal adjacency through pure Attention.
     """
-    def __init__(self, d_model=128, nhead=8, num_layers=6):
+    def __init__(self, d_model=256, nhead=16, num_layers=12):
         super(AlphaZeroNet, self).__init__()
 
         # Input features per triangle: 16 (4 frames * 4 feature channels)
