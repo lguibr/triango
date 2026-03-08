@@ -8,7 +8,7 @@ from queue import Queue, Empty
 from env import GameState, STANDARD_PIECES, TOTAL_TRIANGLES
 
 class Node:
-    __slots__ = ['state', 'move', 'visits', 'value_sum', 'prior', 'parent', 'children', 'untried', 'expanded']
+    __slots__ = ['state', 'move', 'visits', 'value_sum', 'prior', 'parent', 'children', 'untried', 'expanded', 'virtual_loss']
     
     def __init__(self, state: GameState, parent=None, move=None):
         self.state = state
@@ -20,6 +20,7 @@ class Node:
         self.children = []
         self.untried = []
         self.expanded = False
+        self.virtual_loss = 0
         
         if not self.state.terminal:
             for slot in range(3):
@@ -35,9 +36,9 @@ class Node:
             self.expanded = True
 
     def puct(self, c_puct=1.25):
-        exploit = self.value_sum / self.visits if self.visits > 0 else 0.0
-        parent_visits = self.parent.visits if self.parent else 1
-        explore = c_puct * self.prior * math.sqrt(parent_visits) / (1.0 + self.visits)
+        exploit = (self.value_sum - self.virtual_loss) / (self.visits + self.virtual_loss) if (self.visits + self.virtual_loss) > 0 else 0.0
+        parent_visits = self.parent.visits + self.parent.virtual_loss if self.parent else 1
+        explore = c_puct * self.prior * math.sqrt(parent_visits) / (1.0 + self.visits + self.virtual_loss)
         return exploit + explore
         
     def select_child(self):
@@ -90,76 +91,11 @@ def extract_feature(state: GameState) -> torch.Tensor:
     feature[3, 0] = state.available[2]
     return feature
 
-class AsyncEvaluator:
-    def __init__(self, model, device, batch_size=32, timeout=0.01):
+class PythonMCTS:
+    def __init__(self, model, device, batch_size=8):
         self.model = model
         self.device = device
         self.batch_size = batch_size
-        self.timeout = timeout
-        
-        self.queue = Queue()
-        self.running = True
-        
-        self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
-        self.worker_thread.start()
-        
-    def predict(self, feature: torch.Tensor):
-        condition = threading.Condition()
-        result = {}
-        
-        with condition:
-            self.queue.put((feature, condition, result))
-            condition.wait()
-            
-        return result['policy'], result['value']
-        
-    def _worker_loop(self):
-        while self.running:
-            batch = []
-            
-            try:
-                # Wait for at least one item
-                item = self.queue.get(timeout=0.1)
-                batch.append(item)
-                
-                # Try to fill the rest of the batch quickly
-                while len(batch) < self.batch_size:
-                    try:
-                        next_item = self.queue.get(timeout=self.timeout)
-                        batch.append(next_item)
-                    except Empty:
-                        break
-                        
-            except Empty:
-                continue
-            
-            if not batch:
-                continue
-                
-            # Unpack items
-            features = [item[0] for item in batch]
-            conditions = [item[1] for item in batch]
-            results = [item[2] for item in batch]
-            
-            # Form tensor batch -> Evaluate
-            batch_tensor = torch.stack(features).to(self.device)
-            with torch.no_grad():
-                policies, values = self.model(batch_tensor)
-                policies = torch.exp(policies).cpu().numpy()
-                values = values.cpu().numpy()
-                
-            # Distribute results and wake up waiting threads
-            for i in range(len(batch)):
-                res = results[i]
-                res['policy'] = policies[i]
-                res['value'] = float(values[i][0])
-                
-                with conditions[i]:
-                    conditions[i].notify()
-
-class PythonMCTS:
-    def __init__(self, evaluator: AsyncEvaluator):
-        self.evaluator = evaluator
         
     def add_dirichlet_noise(self, node: Node):
         if not node.children: return
@@ -177,9 +113,11 @@ class PythonMCTS:
         while not root.expanded:
             root.expand()
             
-        # Neural Evaluation for root using Async Evaluator
-        features = extract_feature(root.state)
-        policy, value = self.evaluator.predict(features)
+        # Neural Evaluation for root natively
+        features = extract_feature(root.state).unsqueeze(0).to(self.device)
+        with torch.no_grad():
+            policy, value = self.model(features)
+            policy = torch.exp(policy[0]).cpu().numpy()
             
         for child in root.children:
             slot, idx = child.move
@@ -187,29 +125,59 @@ class PythonMCTS:
             
         self.add_dirichlet_noise(root)
         
-        # Batch evaluation list
-        for _ in range(simulations):
-            node = root
+        # Batched evaluation iterations
+        iters = max(1, simulations // self.batch_size)
+        
+        for _ in range(iters):
+            leaves = []
+            search_paths = []
             
-            # Select
-            while node.expanded and len(node.children) > 0:
-                node = node.select_child()
+            # Phase 1: Select B leaves and apply Virtual Loss (GIL free logical traversal)
+            for _ in range(self.batch_size):
+                node = root
+                path = []
                 
-            # Expand
-            if not node.state.terminal and not node.expanded:
-                node = node.expand()
+                # Select
+                while node.expanded and len(node.children) > 0:
+                    node = node.select_child()
+                    path.append(node)
+                    node.virtual_loss += 1
+                    
+                # Expand
+                if not node.state.terminal and not node.expanded:
+                    node = node.expand()
+                    path.append(node)
+                    node.virtual_loss += 1
+                    
+                leaves.append(node)
+                search_paths.append(path)
                 
-            # Evaluate Leaf Async
-            feat = extract_feature(node.state)
-            poli, val = self.evaluator.predict(feat)
+            # Phase 2: Native Batch GPU Evaluation
+            feats = [extract_feature(leaf.state) for leaf in leaves]
+            batch_tensor = torch.stack(feats).to(self.device)
+            
+            with torch.no_grad():
+                policies, values = self.model(batch_tensor)
+                policies = torch.exp(policies).cpu().numpy()
+                values = values.cpu().numpy()
                 
-            # Propagate NN Priors to this new leaf's eventual children
-            if node != root and node.move is not None:
-                slot, idx = node.move
-                node.prior = float(poli[idx])
+            # Phase 3: Backprop & remove virtual loss
+            for i in range(self.batch_size):
+                leaf = leaves[i]
+                path = search_paths[i]
+                val = float(values[i][0])
+                poli = policies[i]
                 
-            # Backprop
-            node.backpropagate(val)
+                # Assign priors to this newly expanded leaf
+                if leaf != root and leaf.move is not None:
+                    slot, idx = leaf.move
+                    leaf.prior = float(poli[idx])
+                    
+                # Untrack virtual losses safely tracking back up
+                for n in path:
+                    n.virtual_loss -= 1
+                    
+                leaf.backpropagate(val)
             
         # Compute visits
         visits = {}

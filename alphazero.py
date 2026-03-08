@@ -6,10 +6,10 @@ import numpy as np
 import random
 import time
 import os
-from concurrent.futures import ThreadPoolExecutor
+import torch.multiprocessing as mp
 
 from env import GameState, TOTAL_TRIANGLES
-from mcts import PythonMCTS, AsyncEvaluator, extract_feature
+from mcts import PythonMCTS, extract_feature
 from model import AlphaZeroNet
 
 class ReplayBuffer(Dataset):
@@ -56,8 +56,18 @@ def play_one_game(game_idx, mcts, simulations, num_games):
         feat = extract_feature(state)
         game_history.append((feat.clone().detach(), policy))
         
+        # Temperature Exploration (tau) for more diverse experience
+        if step < 15:
+            moves = list(visits.keys())
+            probs = np.array([visits[m] for m in moves], dtype=np.float64)
+            probs = probs / np.sum(probs)
+            chosen_idx = np.random.choice(len(moves), p=probs)
+            chosen_move = moves[chosen_idx]
+        else:
+            chosen_move = best_move
+            
         # Apply move
-        slot, idx = best_move
+        slot, idx = chosen_move
         state = state.apply_move(slot, idx)
         
         # Only render Game 1 to prevent interleaved multithreading terminal spam
@@ -69,16 +79,32 @@ def play_one_game(game_idx, mcts, simulations, num_games):
     print(f"Game {game_idx+1} Finished. Steps: {step}, Final Score: {state.score}")
     return game_history, state.score
 
-def self_play(mcts, num_games=10, simulations=100):
+def play_one_game_worker(args):
+    game_idx, model, device, simulations, num_games, batch_size = args
+    mcts = PythonMCTS(model, device, batch_size=batch_size)
+    return play_one_game(game_idx, mcts, simulations, num_games)
+
+def self_play(model, device, num_games=10, simulations=100, batch_size=32):
     buffer = ReplayBuffer()
     
-    # Launch massive 32 concurrent games!
-    with ThreadPoolExecutor(max_workers=32) as executor:
-        futures = [executor.submit(play_one_game, i, mcts, simulations, num_games) for i in range(num_games)]
+    # Needs mp spawn context for sharing CUDA models
+    context = mp.get_context('spawn')
+    
+    args = [(i, model, device, simulations, num_games, batch_size) for i in range(num_games)]
+    
+    # Multi-processing Self-Play utilizing all CPU cores natively
+    results = []
+    with context.Pool(processes=min(64, num_games)) as pool:
+        results = pool.map(play_one_game_worker, args)
         
-        for future in futures:
-            history, final_score = future.result()
-            # Retroactively assign the final score
+    scores = [res[1] for res in results]
+    median_score = np.median(scores) if scores else 0
+    print(f"Self-Play Median Score: {median_score:.1f}, Max Score: {max(scores) if scores else 0}")
+    
+    for history, final_score in results:
+        # Better Experience Selection: Double weight high-scoring games
+        multiplier = 2 if final_score > median_score and final_score > 0 else 1
+        for _ in range(multiplier):
             for (feat, policy) in history:
                 buffer.push(feat, policy, float(final_score))
                 
@@ -135,6 +161,7 @@ def main():
     print(f"Booting pure Python AlphaZero ecosystem on: {device}")
     
     model = AlphaZeroNet().to(device)
+    model.share_memory() # Crucial for multi-processing CUDA sharing
     
     # Optional load
     checkpoint = "models/best_model_python.pth"
@@ -147,16 +174,12 @@ def main():
         print(f"\n================ Iteration {i+1}/{ITERATIONS} ================")
         model.eval()
         
-        # Fresh Async Evaluator ensures background PyTorch batches
-        evaluator = AsyncEvaluator(model, device, batch_size=32)
-        mcts = PythonMCTS(evaluator)
-        
         start = time.time()
-        # Increased games for heavy batching scale-out
-        buffer = self_play(mcts, num_games=32, simulations=800) 
-        print(f"Self-play generated {len(buffer)} states in {time.time() - start:.2f}s")
         
-        evaluator.running = False # Kill background thread
+        # Increased games and multithreaded tree searching. 
+        # Using native GPU batch_size per agent = 64.
+        buffer = self_play(model, device, num_games=64, simulations=800, batch_size=64) 
+        print(f"Self-play generated {len(buffer)} states in {time.time() - start:.2f}s")
         
         # Larger batch size and epochs for faster, deeper learning
         train(model, buffer, device, epochs=10, batch_size=128)
@@ -167,4 +190,8 @@ def main():
         print("=> Saved SOTA PyTorch Model!")
 
 if __name__ == "__main__":
+    try:
+        mp.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass
     main()
