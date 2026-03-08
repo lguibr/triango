@@ -94,7 +94,9 @@ def self_play(model, device, num_games=10, simulations=100, batch_size=32):
     
     # Multi-processing Self-Play utilizing all CPU cores natively
     results = []
-    with context.Pool(processes=min(64, num_games)) as pool:
+    # Windows has a hard limit of 63 handles for WaitForMultipleObjects in multiprocessing.Pool
+    # We cap the active workers at 48 to avoid starving Windows OS threads.
+    with context.Pool(processes=min(16, num_games)) as pool:
         results = pool.map(play_one_game_worker, args)
         
     scores = [res[1] for res in results]
@@ -177,8 +179,8 @@ def main():
         start = time.time()
         
         # Increased games and multithreaded tree searching. 
-        # Using native GPU batch_size per agent = 64.
-        buffer = self_play(model, device, num_games=64, simulations=800, batch_size=64) 
+        # Using native GPU batch_size per agent = 16 (lowered to save RAM).
+        buffer = self_play(model, device, num_games=16, simulations=200, batch_size=64) 
         print(f"Self-play generated {len(buffer)} states in {time.time() - start:.2f}s")
         
         # Larger batch size and epochs for faster, deeper learning
