@@ -7,6 +7,7 @@ import numpy as np
 import random
 import time
 import os
+import json
 import torch.multiprocessing as mp
 
 from env import GameState, TOTAL_TRIANGLES
@@ -135,8 +136,9 @@ def self_play(model, buffer, device, num_games=10, simulations=100, batch_size=3
     args = [(i, state_dict, device, simulations, num_games, batch_size) for i in range(num_games)]
     
     results = []
-    # Cap processes strictly to prevent resource exhaustion
-    with context.Pool(processes=min(8, num_games)) as pool:
+    # Aggressively saturate the CPU to feed the RTX 3080 Ti
+    num_processes = min(16, num_games)
+    with context.Pool(processes=num_processes) as pool:
         results = pool.map(play_one_game_worker, args)
         
     scores = [res[1] for res in results]
@@ -150,7 +152,7 @@ def self_play(model, buffer, device, num_games=10, simulations=100, batch_size=3
                 # Store the true final score of the game as the target Value
                 buffer.push(feat, float(final_score), cleared_line)
                 
-    return buffer
+    return buffer, scores
 
 def train(model, buffer, optimizer, scheduler, device, epochs=5, batch_size=32):
     model.train()
@@ -199,6 +201,8 @@ def train(model, buffer, optimizer, scheduler, device, epochs=5, batch_size=32):
               
 def main():
     torch.set_num_threads(1)
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
     device = torch.device('cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu'))
     print(f"Booting Next-State AlphaZero ecosystem on: {device}")
     
@@ -226,11 +230,45 @@ def main():
         start = time.time()
         
         # Generate experience with Next-State Evaluation via MCTS
-        self_play(model, buffer, device, num_games=16, simulations=200, batch_size=64) 
+        # Aggressive scaling: 128 concurrent games, 800 MCTS sims, 256 batch
+        buffer, scores = self_play(model, buffer, device, num_games=128, simulations=800, batch_size=256) 
         print(f"Self-play generated {len(buffer)} states in {time.time() - start:.2f}s")
         
+        if scores:
+            # Metrics Tracking
+            metrics_file = "models/metrics.json"
+            metrics = {}
+            if os.path.exists(metrics_file):
+                with open(metrics_file, "r") as f:
+                    try:
+                        metrics = json.load(f)
+                    except:
+                        pass
+            
+            iter_key = f"iteration_{i+1}"
+            best_score = max(scores)
+            median_score = float(np.median(scores))
+            metrics[iter_key] = {
+                "best": best_score,
+                "median": median_score,
+                "distribution": scores
+            }
+            with open(metrics_file, "w") as f:
+                json.dump(metrics, f, indent=2)
+                
+            # ASCII Histogram (Bell Curve)
+            print("\n--- Score Distribution ---")
+            bins = np.linspace(min(scores), max(scores) + 1, 10)
+            hist, bin_edges = np.histogram(scores, bins=bins)
+            max_count = max(hist) if len(hist) > 0 else 1
+            for b in range(len(hist)):
+                bar = "█" * int(20 * hist[b] / max_count)
+                print(f"{bin_edges[b]:6.1f} - {bin_edges[b+1]:6.1f} | {bar} ({hist[b]})")
+            print("--------------------------")
+        
         if len(buffer) > 0:
-            train(model, buffer, optimizer, scheduler, device, epochs=10, batch_size=128)
+            # Scale training batch size enormously to leverage RTX 3080 Ti 12GB
+            train(model, buffer, optimizer, scheduler, device, epochs=10, batch_size=1024)
             
             os.makedirs("models", exist_ok=True)
             torch.save(model.state_dict(), checkpoint)

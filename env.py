@@ -240,6 +240,24 @@ def get_piece_overlay(p_id: int):
             result[i] = 1
     return result
 
+def get_valid_placement_mask(p_id: int, current_board: int):
+    """
+    Given a piece ID and the current board bitboard, returns a 96-element array
+    where 1 means the piece CAN legally be placed with its origin at that index.
+    """
+    if p_id == -1:
+        return [0] * TOTAL_TRIANGLES
+        
+    result = [0] * TOTAL_TRIANGLES
+    masks = STANDARD_PIECES[p_id]
+    
+    for i in range(TOTAL_TRIANGLES):
+        m = masks[i]
+        if m != 0 and (current_board & m) == 0:
+            result[i] = 1
+            
+    return result
+
 class GameState:
     __slots__ = ['board', 'score', 'available', 'pieces_left', 'terminal']
     

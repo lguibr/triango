@@ -18,8 +18,8 @@ class AlphaZeroNet(nn.Module):
     def __init__(self, d_model=256, nhead=16, num_layers=12):
         super(AlphaZeroNet, self).__init__()
 
-        # Input features per triangle: 4 (1 board + 3 piece overlays)
-        self.input_proj = nn.Linear(4, d_model)
+        # Input features per triangle: 7 (1 board + 3x piece overlays + 3x valid masks)
+        self.input_proj = nn.Linear(7, d_model)
         
         # Positional Encoding to teach the Transformer the exact absolute ID of each triangle (0 to 95)
         self.pos_emb = nn.Embedding(96, d_model)
