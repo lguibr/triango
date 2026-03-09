@@ -74,25 +74,33 @@ class Node:
 
             
 def extract_feature(state: GameState) -> torch.Tensor:
-    # Build 1 slice of the Tensor spanning right now (T=0). 
-    # For full AlphaZero we would track history, but for simplicity of this pure port, let's map [4, 96]
-    # Where [0, :] is current board, and [1/2/3, :3] is tray
+    # Build a [4, 96] spatial tensor
+    # Channel 0: Current Board
+    # Channel 1: Geometry of piece in slot 0
+    # Channel 2: Geometry of piece in slot 1
+    # Channel 3: Geometry of piece in slot 2
     
-    feature = torch.zeros(16, 96, dtype=torch.float32)
-    # Binary unpacking of integer bitboard
-    bin_str = bin(state.board)[2:].zfill(TOTAL_TRIANGLES)[::-1] # reverse so bit 0 is index 0
+    from env import get_piece_overlay
+    
+    feature = torch.zeros(4, 96, dtype=torch.float32)
+    # Channel 0: Board
+    bin_str = bin(state.board)[2:].zfill(TOTAL_TRIANGLES)[::-1]
     for i in range(TOTAL_TRIANGLES):
         if i < len(bin_str) and bin_str[i] == '1':
             feature[0, i] = 1.0
             
-    # Tray
-    feature[1, 0] = state.available[0]
-    feature[2, 0] = state.available[1]
-    feature[3, 0] = state.available[2]
+    # Channels 1-3: Piece Overlays
+    for slot in range(3):
+        p_id = state.available[slot]
+        overlay = get_piece_overlay(p_id)
+        for i in range(TOTAL_TRIANGLES):
+            if overlay[i] == 1:
+                feature[slot + 1, i] = 1.0
+                
     return feature
 
 class PythonMCTS:
-    def __init__(self, model, device, batch_size=8):
+    def __init__(self, model, device, batch_size=32):
         self.model = model
         self.device = device
         self.batch_size = batch_size
@@ -106,23 +114,30 @@ class PythonMCTS:
             child.prior = (1.0 - epsilon) * child.prior + epsilon * noise[i]
             
     def search(self, root_state: GameState, simulations: int = 100):
-        # We need to completely expand the root instantly
         root = Node(root_state)
         
         # Expand all untried blindly at root
         while not root.expanded:
             root.expand()
             
-        # Neural Evaluation for root natively
-        features = extract_feature(root.state).unsqueeze(0).to(self.device)
-        with torch.no_grad():
-            policy, value = self.model(features)
-            policy = torch.exp(policy[0]).cpu().numpy()
+        # NEXT-STATE EVALUATION: We must evaluate all *children* (after-states) natively to build the Policy prior
+        child_feats = [extract_feature(child.state) for child in root.children]
+        
+        if len(child_feats) > 0:
+            batch_tensor = torch.stack(child_feats).to(self.device)
+            with torch.no_grad():
+                # We only need the Value of the after-state to form our Policy logic
+                values, _ = self.model(batch_tensor)
+                values = values.cpu().numpy().flatten()
+                
+            # Softmax over the predicted Values to create a valid prior distribution
+            # A higher value after-state gets a higher prior probability of being explored
+            exp_v = np.exp(values - np.max(values)) # numerically stable
+            priors = exp_v / np.sum(exp_v)
             
-        for child in root.children:
-            slot, idx = child.move
-            child.prior = float(policy[idx])
-            
+            for i, child in enumerate(root.children):
+                child.prior = float(priors[i])
+                
         self.add_dirichlet_noise(root)
         
         # Batched evaluation iterations
@@ -153,25 +168,28 @@ class PythonMCTS:
                 search_paths.append(path)
                 
             # Phase 2: Native Batch GPU Evaluation
+            # Evaluate the AFTER-STATE of the leaf
             feats = [extract_feature(leaf.state) for leaf in leaves]
             batch_tensor = torch.stack(feats).to(self.device)
             
             with torch.no_grad():
-                policies, values = self.model(batch_tensor)
-                policies = torch.exp(policies).cpu().numpy()
-                values = values.cpu().numpy()
+                pred_values, _ = self.model(batch_tensor)
+                pred_values = pred_values.cpu().numpy().flatten()
                 
             # Phase 3: Backprop & remove virtual loss
             for i in range(self.batch_size):
                 leaf = leaves[i]
                 path = search_paths[i]
-                val = float(values[i][0])
-                poli = policies[i]
+                val = float(pred_values[i])
                 
-                # Assign priors to this newly expanded leaf
-                if leaf != root and leaf.move is not None:
-                    slot, idx = leaf.move
-                    leaf.prior = float(poli[idx])
+                # If this leaf was just expanded, formulate priors for its explicitly-evaluated children
+                # (To optimize computationally, we don't deeply evaluate children until they are selected,
+                #  so we assign uniform priors for deeper nodes here)
+                if leaf != root and not leaf.expanded:
+                    if len(leaf.children) > 0:
+                        uniform_p = 1.0 / len(leaf.children)
+                        for c in leaf.children:
+                            c.prior = uniform_p
                     
                 # Untrack virtual losses safely tracking back up
                 for n in path:
@@ -183,6 +201,9 @@ class PythonMCTS:
         visits = {}
         for child in root.children:
             visits[child.move] = child.visits
+            
+        if not visits:
+            return None, {}
             
         best_move = max(visits.keys(), key=lambda k: visits[k])
         return best_move, visits

@@ -196,6 +196,50 @@ STANDARD_PIECES_DEFS = [
 
 STANDARD_PIECES = compile_pieces(STANDARD_PIECES_DEFS)
 
+def get_piece_overlay(p_id: int):
+    """
+    Given a piece ID, returns a 96-element integer list where elements are 1
+    if the piece occupies that triangle logic. This is projected somewhere safely
+    near the center of the board so the neural network can see its relative geometry.
+    Returns all 0s if p_id is -1.
+    """
+    if p_id == -1:
+        return [0] * TOTAL_TRIANGLES
+        
+    p_def = STANDARD_PIECES_DEFS[p_id]
+    
+    # Same logic as render(): Find a safe center origin
+    origin_idx = -1
+    for r in range(3, 5):
+        for c in range(5, ROW_LENGTHS[r]-5):
+            idx = flat_index(r, c)
+            if p_def.require_up and is_up(r, c): 
+                origin_idx = idx
+                break
+            if p_def.require_down and not is_up(r, c): 
+                origin_idx = idx
+                break
+        if origin_idx != -1: break
+            
+    if origin_idx == -1:
+        for i in range(TOTAL_TRIANGLES):
+            if p_def.require_up and is_up_flat(i): origin_idx = i; break
+            if p_def.require_down and not is_up_flat(i): origin_idx = i; break
+
+    m = 0
+    if origin_idx != -1:
+        origin_x, origin_y, origin_z = INDEX_TO_COORD[origin_idx]
+        for off_x, off_y, off_z in p_def.offsets:
+            tx, ty, tz = origin_x + off_x, origin_y + off_y, origin_z + off_z
+            if (tx, ty, tz) in COORD_TO_INDEX:
+                m |= (1 << COORD_TO_INDEX[(tx, ty, tz)])
+                
+    result = [0] * TOTAL_TRIANGLES
+    for i in range(TOTAL_TRIANGLES):
+        if (m & (1 << i)) != 0:
+            result[i] = 1
+    return result
+
 class GameState:
     __slots__ = ['board', 'score', 'available', 'pieces_left', 'terminal']
     
