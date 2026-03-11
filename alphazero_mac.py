@@ -15,7 +15,7 @@ from mcts import PythonMCTS, extract_feature
 from model import AlphaZeroNet
 
 class ReplayBuffer(Dataset):
-    def __init__(self, capacity=250000):
+    def __init__(self, capacity=100000):
         self.capacity = capacity
         self.buffer = []
         
@@ -54,7 +54,7 @@ def play_one_game(game_idx, mcts, simulations, num_games):
         if best_move is None:
             break
             
-        # Dynamic Temperature Exploration
+        # MAC OPTIMIZATION: Dynamic Temperature Exploration
         # Early game (step 0-15): temp = 1.0 (Highly exploratory)
         # Mid game (15-30): temp = 0.5 (Starts favoring strong moves)
         # Late game (>30): temp = 0.1 (Almost entirely greedy / exploitation)
@@ -101,7 +101,7 @@ def play_one_game(game_idx, mcts, simulations, num_games):
         feat = extract_feature(state)
         game_history.append((feat.clone().detach(), cleared_line, state.score))
         
-        # RENDERING MUTED: To prevent terminal flooding and I/O lockups when the model survives for hundreds of steps
+        # MAC OPTIMIZATION: Disable terminal rendering to drastically speed up execution
         # if game_idx == 0:
         #     state.render()
             
@@ -116,9 +116,8 @@ def play_one_game_worker(args):
         torch.set_num_threads(1)
         game_idx, state_dict, device, simulations, num_games, batch_size = args
         # On MPS and standard multiprocessing, we must instantiate the model INSIDE the worker
-        # because passing a CUDA/MPS model object through spawn serialization crashes.
-        # MAX POWER Scaling
-        model = AlphaZeroNet(d_model=512, nhead=16, num_layers=16).to(device)
+        # MAC OPTIMIZATION: Small Transformer
+        model = AlphaZeroNet(d_model=128, nhead=8, num_layers=8).to(device)
         if state_dict is not None:
             model.load_state_dict(state_dict)
         model.eval()
@@ -131,7 +130,7 @@ def play_one_game_worker(args):
         traceback.print_exc()
         return [], 0
 
-def self_play(model, buffer, device, num_games=128, simulations=2400, batch_size=256):
+def self_play(model, buffer, device, num_games=32, simulations=400, batch_size=128):
     
     context = mp.get_context('spawn')
     
@@ -145,17 +144,20 @@ def self_play(model, buffer, device, num_games=128, simulations=2400, batch_size
     
     results = []
     # Aggressively saturate the CPU to feed the RTX 3080 Ti
-    num_processes = min(16, num_games)
+    # MAC OPTIMIZATION: 4x Compute 
+    num_processes = min(10, num_games)
     with context.Pool(processes=num_processes) as pool:
         results = pool.map(play_one_game_worker, args)
         
     scores = [res[1] for res in results]
     median_score = np.median(scores) if scores else 0
     print(f"Self-Play Median Score: {median_score:.1f}, Max Score: {max(scores) if scores else 0}")
+    
     top_quartile = np.percentile(scores, 75) if scores else 0
     max_score = max(scores) if scores else 0
     
     for history, final_score in results:
+        # MAC OPTIMIZATION: Prioritized Experience Replay (High-Reward Oversampling)
         multiplier = 1
         if final_score >= max_score and final_score > 0:
             multiplier = 5 # 5x representation for the absolute best game
@@ -224,18 +226,18 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu'))
     print(f"Booting Next-State AlphaZero ecosystem on: {device}")
     
-    # MAX POWER Scaling
-    model = AlphaZeroNet(d_model=512, nhead=16, num_layers=16).to(device)
+    # MAC OPTIMIZATION: Small Transformer
+    model = AlphaZeroNet(d_model=128, nhead=8, num_layers=8).to(device)
     # MPS does not support share_memory(), only CPU/CUDA. Removing to fix the crash.
     
     optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
-    # The scheduler decays the LR per *Epoch*. With 10-20 epochs per iteration, 
+    # The scheduler decays the LR per *Epoch*. With 20 epochs per iteration, 
     # step_size=2 was collapsing the LR to near-zero before the first iteration finished.
-    # We increase step_size to 15 to allow the network time to learn on the new architectures.
+    # We increase step_size to 15 so it decays much more gracefully over the 20 epochs.
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=15, gamma=0.8)
-    buffer = ReplayBuffer(capacity=250000)
+    buffer = ReplayBuffer(capacity=100000)
 
-    checkpoint = "models/best_model_python.pth"
+    checkpoint = "models/best_model_mac.pth"
     if os.path.exists(checkpoint):
         try:
             model.load_state_dict(torch.load(checkpoint, map_location=device))
@@ -244,7 +246,7 @@ def main():
             print(f"Failed to load checkpoint (likely architecture mismatch from upgrade): {e}")
             print("=> Training from Tabula Rasa.")
         
-    ITERATIONS = 50
+    ITERATIONS = 250
     for i in range(ITERATIONS):
         print(f"\n================ Iteration {i+1}/{ITERATIONS} ================")
         model.eval()
@@ -252,13 +254,13 @@ def main():
         start = time.time()
         
         # Generate experience with Next-State Evaluation via MCTS
-        # MAX POWER Scaling: 128 concurrent games, 2400 MCTS sims, 256 batch
-        buffer, scores = self_play(model, buffer, device, num_games=128, simulations=2400, batch_size=256) 
+        # MAC OPTIMIZATION: Lightweight MCTS and batching
+        buffer, scores = self_play(model, buffer, device, num_games=32, simulations=400, batch_size=128) 
         print(f"Self-play generated {len(buffer)} states in {time.time() - start:.2f}s")
         
         if scores:
             # Metrics Tracking
-            metrics_file = "models/metrics.json"
+            metrics_file = "models/metrics_mac.json"
             metrics = {}
             if os.path.exists(metrics_file):
                 with open(metrics_file, "r") as f:
@@ -289,8 +291,8 @@ def main():
             print("--------------------------")
         
         if len(buffer) > 0:
-            # Scale training batch size enormously to leverage RTX 3080 Ti 12GB
-            train(model, buffer, optimizer, scheduler, device, epochs=10, batch_size=1024)
+            # MAC OPTIMIZATION: Small batch train
+            train(model, buffer, optimizer, scheduler, device, epochs=20, batch_size=512)
             
             os.makedirs("models", exist_ok=True)
             torch.save(model.state_dict(), checkpoint)

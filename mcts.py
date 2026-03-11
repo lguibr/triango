@@ -132,13 +132,20 @@ class PythonMCTS:
         if len(child_feats) > 0:
             batch_tensor = torch.stack(child_feats).to(self.device)
             with torch.no_grad():
-                # We only need the Value of the after-state to form our Policy logic
-                values, _ = self.model(batch_tensor)
-                values = values.cpu().numpy().flatten()
+                # Value head predicts Remaining Potential (normalized, so we scale it back)
+                rem_scores, line_clears = self.model(batch_tensor)
+                rem_scores = rem_scores.cpu().numpy().flatten() * 100.0
+                line_clears = line_clears.cpu().numpy().flatten()
                 
-            # Softmax over the predicted Values to create a valid prior distribution
-            # A higher value after-state gets a higher prior probability of being explored
-            exp_v = np.exp(values - np.max(values)) # numerically stable
+            # MCTS Expected Final Score = Immediate Score + Predicted Remaining Score
+            values = np.array([child.state.score + rem_scores[i] for i, child in enumerate(root.children)])
+            
+            # Formulate prior: higher Expected Final Score = much higher prior
+            # Incorporate line_clears as a heuristic boost (+20 points equivalent heuristically to encourage exploring line clears)
+            heuristic_values = values + (line_clears * 20.0)
+            
+            # Temperature scaling (5.0) to smooth the priors so we don't solely explore the greedy line initially
+            exp_v = np.exp((heuristic_values - np.max(heuristic_values)) / 5.0) 
             priors = exp_v / np.sum(exp_v)
             
             for i, child in enumerate(root.children):
@@ -179,14 +186,18 @@ class PythonMCTS:
             batch_tensor = torch.stack(feats).to(self.device)
             
             with torch.no_grad():
-                pred_values, _ = self.model(batch_tensor)
-                pred_values = pred_values.cpu().numpy().flatten()
+                pred_rem_scores, _ = self.model(batch_tensor)
+                pred_rem_scores = pred_rem_scores.cpu().numpy().flatten() * 100.0
                 
             # Phase 3: Backprop & remove virtual loss
             for i in range(self.batch_size):
                 leaf = leaves[i]
                 path = search_paths[i]
-                val = float(pred_values[i])
+                
+                if leaf.state.terminal:
+                    val = float(leaf.state.score)
+                else:
+                    val = float(leaf.state.score + pred_rem_scores[i])
                 
                 # If this leaf was just expanded, formulate priors for its explicitly-evaluated children
                 # (To optimize computationally, we don't deeply evaluate children until they are selected,
