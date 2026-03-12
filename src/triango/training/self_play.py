@@ -20,11 +20,12 @@ def play_one_game(
     print(f"--- Game {game_idx+1}/{num_games} Started ---")
 
     step = 0
-    while not state.terminal:
+    while True:
         if state.pieces_left == 0:
             state.refill_tray()
-            if state.terminal:
-                break
+            
+        if state.terminal:
+            break
 
         best_move, visits = mcts.search(state, simulations=simulations)
 

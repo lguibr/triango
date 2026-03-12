@@ -15,13 +15,19 @@ class ReplayBuffer(Dataset[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch
         self.elite_threshold = 0.0
 
     def __len__(self) -> int:
-        return len(self.buffer) + len(self.elite_buffer)
+        # To enforce a 50/50 Elite/Standard split during PyTorch DataLoader randomization,
+        # we dynamically define the dataset epoch length to simply be twice the size of the smaller buffer,
+        # or just 2x the standard buffer size if we interpolate Elite samples cleanly.
+        return len(self.buffer) * 2 if len(self.elite_buffer) > 0 else len(self.buffer)
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        if idx < len(self.buffer):
-            state, target_value, target_line_clear, target_policy = self.buffer[idx]
+        if len(self.elite_buffer) > 0 and idx % 2 == 1:
+            # Over-Sample Elite Data (force 50% ratio mathematically inside the dataset sampler)
+            elite_idx = random.randint(0, len(self.elite_buffer) - 1)
+            state, target_value, target_line_clear, target_policy = self.elite_buffer[elite_idx]
         else:
-            state, target_value, target_line_clear, target_policy = self.elite_buffer[idx - len(self.buffer)]
+            std_idx = (idx // 2) if len(self.elite_buffer) > 0 else idx
+            state, target_value, target_line_clear, target_policy = self.buffer[std_idx]
             
         return (
             state,

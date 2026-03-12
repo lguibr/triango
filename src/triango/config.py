@@ -19,13 +19,13 @@ def get_hardware_config() -> dict[str, Any]:
             "d_model": 512,  # Large Transformer
             "nhead": 8,
             "num_layers": 8,
-            "capacity": 250000,
-            "num_games": 32,
-            "simulations": 800,
+            "capacity": 500000,
+            "num_games": 256,          # Scale up Game Generation locally 
+            "simulations": 2046,
             "self_play_batch_size": 256,
-            "train_batch_size": 1024,
-            "train_epochs": 10,
-            "num_processes": min(4, multiprocessing.cpu_count()),  # Cap at 4 to prevent CUDA OOM
+            "train_batch_size": 2048,  # Scale up PyTorch Batch optimization targets
+            "train_epochs": 20,        # Squeeze max gradient loss out of the Elite sequences
+            "num_processes": max(4, multiprocessing.cpu_count() - 2),  # Unleash full CPU cores!
             "worker_device": torch.device("cuda"),  # Run MCTS heavily on GPU
         }
     elif torch.backends.mps.is_available():

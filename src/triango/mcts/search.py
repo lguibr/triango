@@ -4,7 +4,7 @@ import torch
 
 from triango.env.state import GameState
 from triango.mcts.features import extract_feature
-from triango.mcts.node import Node
+from triango_ext import Node
 
 
 class PythonMCTS:
@@ -25,95 +25,69 @@ class PythonMCTS:
     def search(
         self, root_state: GameState, simulations: int = 100
     ) -> tuple[tuple[int, int] | None, dict[tuple[int, int], int]]:
-        root = Node(root_state)
+        """
+        Drives the deeply-threaded Native C++ Tree asynchronously.
+        Python's sole responsibility is routing `extract_feature` matrices heavily batched to the GPU.
+        """
+        import triango_ext
+        from triango_ext import AsyncMCTS, EvalResult
+        from triango_ext import GameState as CppGameState
+        
+        # Initialize the global C++ Native environment masks if not already initialized
+        # (It's safe to call multiple times if the implementation has a guard, or just call it here)
+        try:
+            triango_ext.initialize_env()
+        except Exception:
+            pass
 
-        while not root.expanded:
-            root.expand()
+        if not isinstance(root_state, CppGameState):
+            board_str = bin(root_state.board)[2:].zfill(96)
+            root_state = CppGameState(root_state.available, board_str, root_state.score)
 
-        # Evaluate the root node directly to extract Action Policy P(s,a)
-        root_feat = extract_feature(root_state).unsqueeze(0).to(self.device)
-        with torch.no_grad():
-            _, _, policy_probs = self.model(root_feat)
+        # 1. Initialize C++ Thread Manager
+        # We use slightly fewer threads than batch_size to keep the queue healthy and GPU saturated
+        manager = AsyncMCTS(root_state, threads=32, sims=simulations, c_puct=1.5)
+        manager.start()
+
+        # 2. Polling Loop
+        while not manager.is_done():
+            # Attempt to pull up to batch_size states simultaneously
+            requests = manager.get_requests(self.batch_size)
+            if not requests:
+                continue
+
+            # Batch them immediately together
+            batch_tensors = []
+            for req in requests:
+                batch_tensors.append(extract_feature(req.state))
             
-        policy_probs = policy_probs.squeeze(0).cpu().numpy()  # [3, 50]
-
-        # Assign true learned priors from the Network Head
-        for child in root.children:
-            if child.move is not None:
-                slot, orientation_idx = child.move
-                # Safety fallback just incase orientation_idx > 50 in future expansions
-                prob = policy_probs[slot, min(orientation_idx, 49)]
-                child.prior = float(prob)
-                
-        # Normalize priors if sum > 0
-        total_p = sum(child.prior for child in root.children)
-        if total_p > 0:
-            for child in root.children:
-                child.prior /= total_p
-        else:
-            uniform = 1.0 / len(root.children) if len(root.children) > 0 else 1.0
-            for child in root.children:
-                child.prior = uniform
-
-        self.add_dirichlet_noise(root)
-
-        iters = max(1, simulations // self.batch_size)
-
-        for _ in range(iters):
-            leaves: list[Node] = []
-            search_paths: list[list[Node]] = []
-
-            for _ in range(self.batch_size):
-                node = root
-                path = []
-
-                while node.expanded and len(node.children) > 0:
-                    next_node = node.select_child()
-                    if next_node is None:
-                        break
-                    node = next_node
-                    path.append(node)
-                    node.virtual_loss += 1
-
-                if not node.state.terminal and not node.expanded:
-                    node = node.expand()
-                    path.append(node)
-                    node.virtual_loss += 1
-
-                leaves.append(node)
-                search_paths.append(path)
-
-            feats = [extract_feature(leaf.state) for leaf in leaves]
-            batch_tensor = torch.stack(feats).to(self.device)
-
+            x = torch.stack(batch_tensors).to(self.device)
+            
             with torch.no_grad():
-                pred_rem_scores, _, _ = self.model(batch_tensor)
+                pred_rem_scores, _, policy_probs = self.model(x)
                 pred_rem_scores = pred_rem_scores.cpu().numpy().flatten() * 100.0
+                policy_probs = policy_probs.cpu().numpy()
+            
+            # Repackage the evaluations back into C++ Result payloads
+            results = []
+            for i, req in enumerate(requests):
+                # The neural net predicts *remaining* score, so total value = current score + predicted remaining
+                v_scalar = float(req.state.score + pred_rem_scores[i])
+                p_array = policy_probs[i].flatten().tolist()
+                results.append(EvalResult(node=req.node, value=v_scalar, policy=p_array))
 
-            for i in range(self.batch_size):
-                leaf = leaves[i]
-                path = search_paths[i]
+            manager.submit_results(results)
 
-                if leaf.state.terminal:
-                    val = float(leaf.state.score)
-                else:
-                    val = float(leaf.state.score + pred_rem_scores[i])
-
-                if leaf != root and not leaf.expanded:
-                    if len(leaf.children) > 0:
-                        uniform_p = 1.0 / len(leaf.children)
-                        for c in leaf.children:
-                            c.prior = uniform_p
-
-                for n in path:
-                    n.virtual_loss -= 1
-
-                leaf.backpropagate(val)
-
+        # 3. Clean Tree shutdown
+        manager.stop()
+        
+        # 4. Same output parsing as classic synchronous MCTS
+        root = manager.root
+        
         visits: dict[tuple[int, int], int] = {}
         for child in root.children:
             if child.move is not None:
-                visits[child.move] = child.visits
+                visits[child.move] = int(child.visits)
 
         if not visits:
             return None, {}
