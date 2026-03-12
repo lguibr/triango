@@ -1,0 +1,47 @@
+============================= test session starts =============================
+platform win32 -- Python 3.10.0, pytest-8.3.5, pluggy-1.5.0
+rootdir: C:\Users\lgui_\lab\triango
+configfile: pyproject.toml
+plugins: anyio-4.11.0, langsmith-0.3.45, cov-6.1.1, mock-3.14.0, xdist-3.8.0
+collected 11 items
+
+tests\test_mcts.py ...                                                   [ 27%]
+tests\test_network.py .                                                  [ 36%]
+tests\test_representation.py .                                           [ 45%]
+tests\test_state.py ...                                                  [ 72%]
+tests\test_training.py ...                                               [100%]
+
+============================== warnings summary ===============================
+tests/test_network.py::test_network_forward
+tests/test_training.py::test_training_loop
+tests/test_training.py::test_self_play_integration
+  C:\Users\lgui_\AppData\Local\Programs\Python\Python310\lib\site-packages\torch\nn\modules\transformer.py:379: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=============================== tests coverage ================================
+_______________ coverage: platform win32, python 3.10.0-final-0 _______________
+
+Name                                Stmts   Miss  Cover   Missing
+-----------------------------------------------------------------
+src\triango\__init__.py                 0      0   100%
+src\triango\config.py                   9      9     0%   1-53
+src\triango\env\__init__.py             0      0   100%
+src\triango\env\constants.py            2      0   100%
+src\triango\env\coords.py              59      1    98%   17
+src\triango\env\pieces.py             129      5    96%   129, 147-149, 167
+src\triango\env\state.py              112     63    44%   39, 54-55, 58-59, 70-145
+src\triango\main.py                    73     73     0%   1-96
+src\triango\mcts\__init__.py            0      0   100%
+src\triango\mcts\features.py           20      0   100%
+src\triango\mcts\node.py               63     17    73%   56-65, 68-75, 79, 86, 89
+src\triango\mcts\search.py             83     74    11%   12-14, 17-23, 28-117
+src\triango\model\__init__.py           0      0   100%
+src\triango\model\network.py           26      0   100%
+src\triango\training\__init__.py        0      0   100%
+src\triango\training\buffer.py         15      0   100%
+src\triango\training\self_play.py      95     57    40%   17-64, 70-96, 107, 123-125, 139-142
+src\triango\training\trainer.py        33      0   100%
+-----------------------------------------------------------------
+TOTAL                                 719    299    58%
+======================= 11 passed, 3 warnings in 15.96s =======================
