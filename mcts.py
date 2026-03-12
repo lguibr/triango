@@ -35,8 +35,13 @@ class Node:
         if len(self.untried) == 0:
             self.expanded = True
 
-    def puct(self, c_puct=1.25):
-        exploit = (self.value_sum - self.virtual_loss) / (self.visits + self.virtual_loss) if (self.visits + self.virtual_loss) > 0 else 0.0
+    def puct(self, c_puct=1.5): # MAC OPTIMIZATION: Increased c_puct to value prior more heavily over raw brute force
+        # First Play Urgency (FPU): If node is unvisited, assume it's roughly as good as its parent
+        if self.visits + self.virtual_loss == 0:
+            exploit = self.parent.value_sum / max(1, self.parent.visits) if self.parent else 0.0
+        else:
+            exploit = (self.value_sum - self.virtual_loss) / (self.visits + self.virtual_loss)
+            
         parent_visits = self.parent.visits + self.parent.virtual_loss if self.parent else 1
         explore = c_puct * self.prior * math.sqrt(parent_visits) / (1.0 + self.visits + self.virtual_loss)
         return exploit + explore
@@ -113,7 +118,8 @@ class PythonMCTS:
         
     def add_dirichlet_noise(self, node: Node):
         if not node.children: return
-        alpha = 0.3
+        # MAC OPTIMIZATION: Dynamic Alpha. More moves -> sharper noise to avoid uniformly flat priors
+        alpha = 10.0 / len(node.children) if len(node.children) > 0 else 0.3
         epsilon = 0.25
         noise = np.random.dirichlet([alpha] * len(node.children))
         for i, child in enumerate(node.children):

@@ -100,29 +100,29 @@ def play_one_game(game_idx, mcts, simulations, num_games):
         # Save the *Next-State* (the state we just transitioned to)
         feat = extract_feature(state)
         game_history.append((feat.clone().detach(), cleared_line, state.score))
-        
-        # MAC OPTIMIZATION: Disable terminal rendering to drastically speed up execution
-        # if game_idx == 0:
-        #     state.render()
             
         step += 1
         
-    print(f"Game {game_idx+1} Finished. Steps: {step}, Final Score: {state.score}")
+    print(f"Game {game_idx+1}/{num_games} Finished. Steps: {step}, Final Score: {state.score}")
     return game_history, state.score
 
 def play_one_game_worker(args):
     try:
         import torch
+        # MAC OPTIMIZATION: Critical. Force thread count to 1 inside the worker to prevent nested CPU thread thrashing
         torch.set_num_threads(1)
-        game_idx, state_dict, device, simulations, num_games, batch_size = args
-        # On MPS and standard multiprocessing, we must instantiate the model INSIDE the worker
-        # MAC OPTIMIZATION: Small Transformer
-        model = AlphaZeroNet(d_model=128, nhead=8, num_layers=8).to(device)
+        game_idx, state_dict, simulations, num_games, batch_size = args
+        
+        # MAC OPTIMIZATION: explicitly instantiate the localized model on the CPU.
+        # This completely bypasses the Apple Silicon `mps` memory deadlock that happens
+        # when multiple separate processes all try to talk to the Metal driver.
+        cpu_device = torch.device('cpu')
+        model = AlphaZeroNet(d_model=128, nhead=8, num_layers=8).to(cpu_device)
         if state_dict is not None:
             model.load_state_dict(state_dict)
         model.eval()
         
-        mcts = PythonMCTS(model, device, batch_size=batch_size)
+        mcts = PythonMCTS(model, cpu_device, batch_size=batch_size)
         return play_one_game(game_idx, mcts, simulations, num_games)
     except Exception as e:
         import traceback
@@ -130,22 +130,29 @@ def play_one_game_worker(args):
         traceback.print_exc()
         return [], 0
 
-def self_play(model, buffer, device, num_games=32, simulations=400, batch_size=128):
-    
+def self_play(model, buffer, device, num_games=100, simulations=500, batch_size=128):
+    """
+    MAC OPTIMIZATION (Hybrid Arch): Farms self-play generation out to all CPU cores simultaneously,
+    then returns the massive collected dataset back to the main process for fast MPS GPU training.
+    """
     context = mp.get_context('spawn')
     
-    # Extract state_dict to pass safely instead of the full model object
-    # Crucially, we MUST move it to CPU first, otherwise MPS/CUDA tensors will crash pickler
+    # We must move the main model state completely to the CPU so it survives pickling 
+    # when being dispatched to the worker processes.
     state_dict = None
     if device.type != 'cpu':
         state_dict = {k: v.cpu() for k, v in model.state_dict().items()}
+    else:
+        state_dict = model.state_dict()
     
-    args = [(i, state_dict, device, simulations, num_games, batch_size) for i in range(num_games)]
+    # Notice we do not pass `device` here. The worker explicitly overrides to 'cpu'.
+    args = [(i, state_dict, simulations, num_games, batch_size) for i in range(num_games)]
     
     results = []
-    # Aggressively saturate the CPU to feed the RTX 3080 Ti
-    # MAC OPTIMIZATION: 4x Compute 
-    num_processes = min(10, num_games)
+    # Saturate the M-series CPU. Activity Monitor should show Python at 800%+ CPU usage now.
+    num_processes = min(14, num_games) 
+    print(f"Spawning {num_processes} concurrent CPU workers for self-play generation...")
+    
     with context.Pool(processes=num_processes) as pool:
         results = pool.map(play_one_game_worker, args)
         
@@ -254,8 +261,8 @@ def main():
         start = time.time()
         
         # Generate experience with Next-State Evaluation via MCTS
-        # MAC OPTIMIZATION: Lightweight MCTS and batching
-        buffer, scores = self_play(model, buffer, device, num_games=32, simulations=400, batch_size=128) 
+        # MAC OPTIMIZATION: Massive Generation. 100 Games. 500 Simulations each. Farmed on CPU.
+        buffer, scores = self_play(model, buffer, device, num_games=100, simulations=500, batch_size=64) 
         print(f"Self-play generated {len(buffer)} states in {time.time() - start:.2f}s")
         
         if scores:
@@ -291,8 +298,9 @@ def main():
             print("--------------------------")
         
         if len(buffer) > 0:
-            # MAC OPTIMIZATION: Small batch train
-            train(model, buffer, optimizer, scheduler, device, epochs=20, batch_size=512)
+            # MAC OPTIMIZATION: Dropped batch size to 256. 1024 blows out unified memory and 
+            # causes extreme page-swapping delays during the epoch training loop.
+            train(model, buffer, optimizer, scheduler, device, epochs=20, batch_size=256)
             
             os.makedirs("models", exist_ok=True)
             torch.save(model.state_dict(), checkpoint)

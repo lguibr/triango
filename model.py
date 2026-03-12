@@ -19,23 +19,31 @@ class AlphaZeroNet(nn.Module):
         super(AlphaZeroNet, self).__init__()
 
         # Input features per triangle: 7 (1 board + 3x piece overlays + 3x valid masks)
-        self.input_proj = nn.Linear(7, d_model)
+        # MAC OPTIMIZATION: Deep Feature Embedding (Juice)
+        self.input_proj = nn.Sequential(
+            nn.Linear(7, 64),
+            nn.Mish(),
+            nn.LayerNorm(64),
+            nn.Linear(64, d_model)
+        )
         
         # Positional Encoding to teach the Transformer the exact absolute ID of each triangle (0 to 95)
         self.pos_emb = nn.Embedding(96, d_model)
         
-        # SOTA Self-Attention Core
+        # SOTA Self-Attention Core - PRE-LN Architecture for deeper gradient stability
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model, 
             nhead=nhead, 
             dim_feedforward=d_model * 4, 
             dropout=0.1, 
-            batch_first=True
+            batch_first=True,
+            norm_first=True # MAC OPTIMIZATION: Pre-LN for faster convergence
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         
         # Value Head: Predicts V(s) -> scalar mathematical expectation [0, 300+]
         self.value_fc1 = nn.Linear(d_model, 64)
+        self.value_norm = nn.LayerNorm(64)
         self.value_fc2 = nn.Linear(64, 1)
         
         # Auxiliary Line Clear Head: Predicts probability of creating a line clear [0.0, 1.0]
@@ -61,7 +69,8 @@ class AlphaZeroNet(nn.Module):
         # 4. Next-State Evaluation Heads (Mean pool across all 96 spatial tokens logically)
         # [Batch, 96, d_model] -> [Batch, d_model]
         v_pooled = attn_out.mean(dim=1)
-        v = F.relu(self.value_fc1(v_pooled))
+        # MAC OPTIMIZATION: Mish activation and LayerNorm for value extraction stabilization
+        v = F.mish(self.value_norm(self.value_fc1(v_pooled)))
         
         # Raw Value Expectation
         value = self.value_fc2(v)
