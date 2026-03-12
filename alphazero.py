@@ -120,8 +120,8 @@ def play_one_game_worker(args):
         # We explicitly instantiate the localized model on the device (CUDA for RTX).
         # We keep the multiprocessing pool aggressively small (e.g. 4) so that we don't 
         # instantly OOM the GPU by spawning 16 heavy Transformer models sequentially.
-        # MAX POWER Scaling
-        model = AlphaZeroNet(d_model=512, nhead=16, num_layers=16).to(device)
+        # RTX Scaling: Lowered depth from 16 to 8 to prevent MCTS calculation taking hours per move.
+        model = AlphaZeroNet(d_model=512, nhead=8, num_layers=8).to(device)
         if state_dict is not None:
             model.load_state_dict(state_dict)
         model.eval()
@@ -134,7 +134,7 @@ def play_one_game_worker(args):
         traceback.print_exc()
         return [], 0
 
-def self_play(model, buffer, device, num_games=128, simulations=2400, batch_size=256):
+def self_play(model, buffer, device, num_games=32, simulations=800, batch_size=256):
     
     context = mp.get_context('spawn')
     
@@ -231,9 +231,8 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu'))
     print(f"Booting Next-State AlphaZero ecosystem on: {device}")
     
-    # MAX POWER Scaling
-    model = AlphaZeroNet(d_model=512, nhead=16, num_layers=16).to(device)
-    # MPS does not support share_memory(), only CPU/CUDA. Removing to fix the crash.
+    # RTX Scaling
+    model = AlphaZeroNet(d_model=512, nhead=8, num_layers=8).to(device)
     
     optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
     # The scheduler decays the LR per *Epoch*. With 10-20 epochs per iteration, 
@@ -259,8 +258,8 @@ def main():
         start = time.time()
         
         # Generate experience with Next-State Evaluation via MCTS
-        # MAX POWER Scaling: 128 concurrent games, 2400 MCTS sims, 256 batch
-        buffer, scores = self_play(model, buffer, device, num_games=128, simulations=2400, batch_size=256) 
+        # RTX Scaling: Realistic generation limits to prevent hours-long epoch phases
+        buffer, scores = self_play(model, buffer, device, num_games=32, simulations=800, batch_size=256) 
         print(f"Self-play generated {len(buffer)} states in {time.time() - start:.2f}s")
         
         if scores:
