@@ -115,19 +115,18 @@ def play_one_game_worker(args):
         import torch
         # Critical. Force thread count to 1 inside the worker to prevent nested CPU thread thrashing
         torch.set_num_threads(1)
-        game_idx, state_dict, simulations, num_games, batch_size = args
+        game_idx, state_dict, device, simulations, num_games, batch_size = args
         
-        # Explicitly instantiate the localized model on the CPU for generation.
-        # This completely bypasses CUDA/MPS memory/lock constraints and allows us to scale 
-        # to 16+ workers easily without OOMing the GPU.
-        cpu_device = torch.device('cpu')
+        # We explicitly instantiate the localized model on the device (CUDA for RTX).
+        # We keep the multiprocessing pool aggressively small (e.g. 4) so that we don't 
+        # instantly OOM the GPU by spawning 16 heavy Transformer models sequentially.
         # MAX POWER Scaling
-        model = AlphaZeroNet(d_model=512, nhead=16, num_layers=16).to(cpu_device)
+        model = AlphaZeroNet(d_model=512, nhead=16, num_layers=16).to(device)
         if state_dict is not None:
             model.load_state_dict(state_dict)
         model.eval()
         
-        mcts = PythonMCTS(model, cpu_device, batch_size=batch_size)
+        mcts = PythonMCTS(model, device, batch_size=batch_size)
         return play_one_game(game_idx, mcts, simulations, num_games)
     except Exception as e:
         import traceback
@@ -147,12 +146,13 @@ def self_play(model, buffer, device, num_games=128, simulations=2400, batch_size
     else:
         state_dict = model.state_dict()
     
-    args = [(i, state_dict, simulations, num_games, batch_size) for i in range(num_games)]
+    args = [(i, state_dict, device, simulations, num_games, batch_size) for i in range(num_games)]
     
     results = []
-    # Aggressively saturate the CPU to feed the RTX 3080 Ti
-    num_processes = min(16, num_games)
-    print(f"Spawning {num_processes} concurrent CPU workers for self-play generation...")
+    # RTX REMEDIATION: Hard-capping the CUDA generation pool to 4 to prevent Out of Memory.
+    # 4 Workers running fully-saturated CUDA MCTS will obliterate 16 workers on an x86 CPU.
+    num_processes = min(4, num_games)
+    print(f"Spawning {num_processes} concurrent CUDA workers for self-play generation...")
     with context.Pool(processes=num_processes) as pool:
         results = pool.map(play_one_game_worker, args)
         
