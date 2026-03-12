@@ -43,6 +43,20 @@ __pycache__/
 # Logs and checkpoints
 /python/runs/
 .cache/
+*.json
+*.txt
+*.md
+!README.md
+!src/**/README.md
+!tests/README.md
+
+# Pytest Coverage & Testing
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.log
 
 # Environments
 venv/
