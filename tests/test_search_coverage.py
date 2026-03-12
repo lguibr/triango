@@ -42,7 +42,7 @@ def test_mcts_search():
     class MockModel(torch.nn.Module):
         def forward(self, x):
             batch_size = x.size(0)
-            return torch.zeros(batch_size, 1), torch.zeros(batch_size, 1)
+            return torch.zeros(batch_size, 1), torch.zeros(batch_size, 1), torch.zeros(batch_size, 3, 50)
             
     model = MockModel()
     mcts = PythonMCTS(model, torch.device('cpu'), batch_size=2)

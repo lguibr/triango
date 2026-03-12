@@ -59,9 +59,10 @@ def test_self_play():
         mock_pool = MagicMock()
         mock_ctx.return_value.Pool.return_value.__enter__.return_value = mock_pool
         # Give mock results
+        dummy_policy = torch.zeros(3, 50)
         mock_pool.map.return_value = [
-            ([ (torch.zeros(7, 96), 0.0, 5.0) ], 5.0),
-            ([ (torch.zeros(7, 96), 0.0, 1.0) ], 1.0),
+            ([ (torch.zeros(7, 96), 0.0, 5.0, dummy_policy) ], 5.0),
+            ([ (torch.zeros(7, 96), 0.0, 1.0, dummy_policy) ], 1.0),
         ]
         
         buf, scores = self_play(model, buffer, hw_config)

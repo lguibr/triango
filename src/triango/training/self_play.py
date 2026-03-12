@@ -13,9 +13,9 @@ from triango.training.buffer import ReplayBuffer
 
 def play_one_game(
     game_idx: int, mcts: PythonMCTS, simulations: int, num_games: int
-) -> tuple[list[tuple[torch.Tensor, float, float]], float]:
+) -> tuple[list[tuple[torch.Tensor, float, float, torch.Tensor]], float]:
     state = GameState()
-    game_history: list[tuple[torch.Tensor, float, float]] = []
+    game_history: list[tuple[torch.Tensor, float, float, torch.Tensor]] = []
 
     print(f"--- Game {game_idx+1}/{num_games} Started ---")
 
@@ -38,6 +38,14 @@ def play_one_game(
 
         probs = counts ** (1.0 / temp)
         probs = probs / np.sum(probs)
+        
+        # Build full target policy matrix [3, 50]
+        # Map each legal (slot, orientation_idx) to its MCTS visitation probability
+        target_policy_mat = torch.zeros(3, 50, dtype=torch.float32)
+        for idx_m, m in enumerate(moves):
+            slot, o_idx = m
+            # clip to bounds just in case
+            target_policy_mat[slot, min(o_idx, 49)] = probs[idx_m]
 
         chosen_idx = np.random.choice(len(moves), p=probs)
         chosen_move = moves[chosen_idx]
@@ -56,7 +64,7 @@ def play_one_game(
         cleared_line = 1.0 if pop_after <= pop_before else 0.0
 
         feat = extract_feature(state)
-        game_history.append((feat.clone().detach(), cleared_line, float(state.score)))
+        game_history.append((feat.clone().detach(), cleared_line, float(state.score), target_policy_mat))
 
         step += 1
 
@@ -66,7 +74,7 @@ def play_one_game(
 
 def play_one_game_worker(
     args: tuple[int, dict[str, Any] | None, dict[str, Any]],
-) -> tuple[list[tuple[torch.Tensor, float, float]], float]:
+) -> tuple[list[tuple[torch.Tensor, float, float, torch.Tensor]], float]:
     try:
         import torch
 

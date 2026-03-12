@@ -9,25 +9,28 @@ def test_buffer():
     buf = ReplayBuffer(capacity=10, elite_ratio=0.5)
     
     # 5 standard capacity, 5 elite capacity.
+    dummy_policy = torch.zeros(3, 50)
     for i in range(15):
         # Push standard games (score 0 doesn't trigger elite)
-        buf.push_game([(torch.zeros(7, 96), 1.0, 0.0)], 0.0)
+        buf.push_game([(torch.zeros(7, 96), 1.0, 0.0, dummy_policy)], 0.0)
         
     for i in range(6):
         # Push elite games
-        buf.push_game([(torch.zeros(7, 96), 1.0, 100.0)], 100.0)
+        buf.push_game([(torch.zeros(7, 96), 1.0, 100.0, dummy_policy)], 100.0)
         
     assert len(buf) == 10 # 5 standard + 5 elite
-    state, val, lc = buf[0]
+    state, val, lc, p = buf[0]
     assert state.shape == (7, 96)
+    assert p.shape == (3, 50)
 
 def test_training_loop():
     model = AlphaZeroNet(d_model=64, nhead=2, num_layers=2)
     buffer = ReplayBuffer(capacity=100)
     
     # Push dummy data
+    dummy_policy = torch.zeros(3, 50)
     for _ in range(5):
-        buffer.push(torch.zeros(7, 96), 10.0, 1.0)
+        buffer.push_game([(torch.zeros(7, 96), 1.0, 10.0, dummy_policy)], 10.0)
         
     hw_config = {
         'device': torch.device('cpu'),

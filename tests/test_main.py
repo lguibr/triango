@@ -12,7 +12,7 @@ def test_main_execution(mock_exists, mock_load, mock_train, mock_self_play):
     from triango.training.buffer import ReplayBuffer
     dummy_buffer = ReplayBuffer(10)
     import torch
-    dummy_buffer.push(torch.zeros(7, 96), 1.0, 1.0)
+    dummy_buffer.push_game([(torch.zeros(7, 96), 1.0, 1.0, torch.zeros(3, 50))], 10.0)
     
     mock_self_play.side_effect = [(dummy_buffer, [10.0, 15.0]), Exception("Break Loop")]
     
