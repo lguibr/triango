@@ -7,7 +7,7 @@ from triango.training.self_play import self_play
 from triango.training.trainer import train
 
 
-def test_buffer():
+def test_buffer() -> None:
     buf = ReplayBuffer(capacity=10, elite_ratio=0.5)
     
     # 5 standard capacity, 5 elite capacity.
@@ -25,7 +25,7 @@ def test_buffer():
     assert state.shape == (7, 96)
     assert p.shape == (3, 50)
 
-def test_training_loop():
+def test_training_loop() -> None:
     model = AlphaZeroNet(d_model=64, nhead=2, num_layers=2)
     buffer = ReplayBuffer(capacity=100)
     
@@ -46,7 +46,7 @@ def test_training_loop():
     train(model, buffer, optimizer, scheduler, hw_config)
     # If no exception, it passed.
 
-def test_self_play_integration():
+def test_self_play_integration() -> None:
     model = AlphaZeroNet(d_model=32, nhead=2, num_layers=1)
     buffer = ReplayBuffer(capacity=100)
     

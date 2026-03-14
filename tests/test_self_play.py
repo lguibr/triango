@@ -8,7 +8,7 @@ from triango.training.buffer import ReplayBuffer
 from triango.training.self_play import play_one_game, play_one_game_worker, self_play
 
 
-def test_play_one_game():
+def test_play_one_game() -> None:
     model = MagicMock()
     mcts = PythonMCTS(model, torch.device('cpu'), batch_size=2)
     
@@ -26,7 +26,7 @@ def test_play_one_game():
             assert len(history) >= 1
             assert score >= 0
 
-def test_play_one_game_worker():
+def test_play_one_game_worker() -> None:
     hw_config = {
         'd_model': 16, 'nhead': 1, 'num_layers': 1,
         'simulations': 2, 'num_games': 1,
@@ -43,7 +43,7 @@ def test_play_one_game_worker():
         res = play_one_game_worker((0, net.state_dict(), hw_config))
         assert res == ([], 0.0)
 
-def test_self_play():
+def test_self_play() -> None:
     model = MagicMock()
     # Mock state dict to bypass CPU tensor clone
     model.state_dict.return_value = {}

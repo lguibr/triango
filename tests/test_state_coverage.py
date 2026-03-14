@@ -1,7 +1,9 @@
+import pytest
+
 from triango.env.state import GameState
 
 
-def test_state_render(capsys):
+def test_state_render(capsys: pytest.CaptureFixture[str]) -> None:
     state = GameState(pieces=[0, 1, 2], score=42, board=1)
     # Just render it to cover the lines
     state.render()
@@ -10,7 +12,7 @@ def test_state_render(capsys):
     assert "Score: 42" in captured.out
     assert "Available Pieces:" in captured.out
 
-def test_state_terminal_paths():
+def test_state_terminal_paths() -> None:
     # Force a totally filled board to test terminal
     state = GameState(pieces=[0, 0, 0])
     state.board = -1  # All bits 1 regardless of size
@@ -21,7 +23,7 @@ def test_state_terminal_paths():
     state2 = GameState(pieces=[-1, -1, -1])
     assert state2.terminal
 
-def test_apply_move_invalid():
+def test_apply_move_invalid() -> None:
     state = GameState(pieces=[0, 1, 2], board=(1 << 96) - 1)
     # Board is full, piece 0 cannot be placed
     res = state.apply_move(0, 50)

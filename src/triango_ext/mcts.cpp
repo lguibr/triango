@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <limits>
 #include <iostream>
+#include <random>
 
 Node::Node(GameState* state_ptr, Node* parent_ptr, std::pair<int, int> m)
     : state(state_ptr), parent(parent_ptr), move(m) {
@@ -22,6 +23,14 @@ Node::Node(GameState* state_ptr, Node* parent_ptr, std::pair<int, int> m)
 
     if (untried.empty()) {
         expanded = true;
+    }
+    
+    // If not root, inherit prior probabilty from parent's cached policy distribution mapping
+    if (parent_ptr && !parent_ptr->cached_policy.empty()) {
+        int flat_idx = m.first * 50 + m.second;
+        if (flat_idx >= 0 && flat_idx < parent_ptr->cached_policy.size()) {
+            prior = parent_ptr->cached_policy[flat_idx];
+        }
     }
 }
 
@@ -108,6 +117,51 @@ void Node::backpropagate(float reward) {
     }
 }
 
+void Node::apply_dirichlet_noise(float alpha, float epsilon) {
+    if (children.empty() && untried.empty()) return;
+    
+    std::lock_guard<std::mutex> lock(mtx);
+    // Combine children and untried counts
+    int num_actions = children.size() + untried.size();
+    if (num_actions == 0) return;
+
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::gamma_distribution<float> d(alpha, 1.0f);
+
+    std::vector<float> noise;
+    noise.reserve(num_actions);
+    float sum_noise = 0.0f;
+    for (int i = 0; i < num_actions; ++i) {
+        float sample = d(gen);
+        noise.push_back(sample);
+        sum_noise += sample;
+    }
+
+    if (sum_noise < 1e-6f) return; // Prevent division by nearly zero
+    for (float& val : noise) {
+        val /= sum_noise;
+    }
+
+    // Apply noise to existing children
+    int noise_idx = 0;
+    for (Node* child : children) {
+        child->prior = (1.0f - epsilon) * child->prior + epsilon * noise[noise_idx++];
+    }
+
+    // Applying noise to untried actions requires storing it in the policy cache so it propagates upon expand()
+    // It's technically more accurate to pre-expand all root nodes before noise, but we can distribute it via the cache
+    if (!cached_policy.empty() && !untried.empty()) {
+        for (const auto& u : untried) {
+            int flat_idx = u.first * 50 + u.second;
+            if (flat_idx >= 0 && flat_idx < cached_policy.size() && noise_idx < noise.size()) {
+                cached_policy[flat_idx] = (1.0f - epsilon) * cached_policy[flat_idx] + epsilon * noise[noise_idx++];
+            } else if (noise_idx < noise.size()) {
+                noise_idx++; // consume the noise safely even if out of bounds of cache size
+            }
+        }
+    }
+}
 
 AsyncMCTS::AsyncMCTS(GameState* root_state, int threads, int sims, float cpuct)
     : num_threads(threads), target_simulations(sims), c_puct(cpuct) {
@@ -238,11 +292,16 @@ void AsyncMCTS::submit_results(const std::vector<EvalResult>& results) {
         // Assign priors to children based on policy
         if (!node->state->terminal) {
             std::lock_guard<std::mutex> lock(node->mtx);
-            // We map the flat [3 * 96] policy back to untried/children
-            // But we actually only care about populating `prior` logic on existing children/untried dynamically when they expand.
-            // Since `expand()` creates a child, we can just assign prior there, OR set a policy dict on the node.
-            // For now, simpler: we just backpropagate the value. (Priors can be handled directly if we store `std::vector<float> policy` on Node).
-            // Actually, we must push priors.
+            // Cache the full [150] probabilities (3 * 50 array) so expanded nodes can pull immediately
+            node->cached_policy = res.policy;
+            
+            // For any children that ALREADY expanded asynchronously while we waited for the python tensor to return:
+            for (Node* child : node->children) {
+                int flat_idx = child->move.first * 50 + child->move.second;
+                if (flat_idx >= 0 && flat_idx < node->cached_policy.size()) {
+                    child->prior = node->cached_policy[flat_idx];
+                }
+            }
         }
 
         node->backpropagate(res.value);

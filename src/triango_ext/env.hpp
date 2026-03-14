@@ -46,6 +46,7 @@ struct BitBoard {
     int count_ones() const;
     void set_bit(int idx);
     bool get_bit(int idx) const;
+    uint64_t to_int() const { return lo; }
 };
 
 // --- Core Environment Initialization ---
@@ -72,6 +73,6 @@ struct GameState {
     void refill_tray();
 
     // Helper functions to pass the BitBoard back and forth with Python
-    std::string board_to_string() const;
-    static BitBoard string_to_board(const std::string& s);
+    std::vector<uint8_t> get_board_bytes() const;
+    static BitBoard bytes_to_board(const std::vector<uint8_t>& bytes);
 };

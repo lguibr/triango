@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from triango.main import main
 
@@ -7,7 +7,7 @@ from triango.main import main
 @patch('triango.main.train')
 @patch('torch.load')
 @patch('os.path.exists')
-def test_main_execution(mock_exists, mock_load, mock_train, mock_self_play):
+def test_main_execution(mock_exists: MagicMock, mock_load: MagicMock, mock_train: MagicMock, mock_self_play: MagicMock) -> None:
     mock_exists.return_value = False
     
     from triango.training.buffer import ReplayBuffer
@@ -36,7 +36,7 @@ def test_main_execution(mock_exists, mock_load, mock_train, mock_self_play):
 
 @patch('triango.main.self_play')
 @patch('triango.main.train')
-def test_main_checkpoint(mock_train, mock_self_play):
+def test_main_checkpoint(mock_train: MagicMock, mock_self_play: MagicMock) -> None:
     with patch('triango.main.get_hardware_config') as mock_hw:
         import torch
 

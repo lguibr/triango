@@ -32,7 +32,8 @@ class AlphaZeroNet(nn.Module):
         )
 
         # Positional Encoding to teach the Transformer the exact absolute ID of each triangle (0 to 95)
-        self.pos_emb = nn.Embedding(96, d_model)
+        # We replace blind 1D embedding with mathematically rigid 3D hexagonal positions.
+        self.register_buffer("pos_emb", self._build_geometric_embeddings(d_model))
 
         # SOTA Self-Attention Core - PRE-LN Architecture for deeper gradient stability
         encoder_layer = nn.TransformerEncoderLayer(
@@ -56,6 +57,39 @@ class AlphaZeroNet(nn.Module):
         self.policy_norm = nn.LayerNorm(128)
         self.policy_fc2 = nn.Linear(128, 3 * 50)
 
+    def _build_geometric_embeddings(self, d_model: int) -> torch.Tensor:
+        """
+        Builds a frozen sinusoidal positional encoding tensor of shape [1, 96, d_model].
+        Maps the exact 3D Hexagonal (x, y, z) coordinates into the latent space.
+        """
+        import math
+
+        from triango.env.coords import INDEX_TO_COORD
+
+        pe = torch.zeros(96, d_model)
+        div_term = torch.exp(torch.arange(0, d_model, 6, dtype=torch.float) * (-math.log(10000.0) / d_model))
+
+        for i in range(96):
+            if i in INDEX_TO_COORD:
+                x, y, z = INDEX_TO_COORD[i]
+            else:
+                x, y, z = 0, 0, 0
+            
+            # Pack x, y, z into the d_model dimension using interleaved Sine/Cosine
+            # We stride by 6 because there are 3 variables (x,y,z) each producing a sin/cos pair = 6 dims
+            for j in range(len(div_term)):
+                if j * 6 < d_model:
+                    pe[i, j * 6 + 0] = math.sin(x * div_term[j])
+                    pe[i, j * 6 + 1] = math.cos(x * div_term[j])
+                if j * 6 + 2 < d_model:
+                    pe[i, j * 6 + 2] = math.sin(y * div_term[j])
+                    pe[i, j * 6 + 3] = math.cos(y * div_term[j])
+                if j * 6 + 4 < d_model:
+                    pe[i, j * 6 + 4] = math.sin(z * div_term[j])
+                    pe[i, j * 6 + 5] = math.cos(z * div_term[j])
+
+        return pe.unsqueeze(0)  # [1, 96, d_model]
+
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         # x shape: [Batch, 7, 96]
         # Transformers require sequence-centric shapes: [Batch, SequenceLength=96, EmbedSize=7]
@@ -67,8 +101,8 @@ class AlphaZeroNet(nn.Module):
         x = self.input_proj(x)
 
         # 2. Add spatial positional embeddings (0..95 offsets)
-        positions = torch.arange(96, device=x.device).unsqueeze(0).expand(batch_size, -1)
-        x = x + self.pos_emb(positions)
+        # Using registered buffer pos_emb which matches device via standard broadcast
+        x = x + self.pos_emb
 
         # 3. Deep Hexagonal Self-Attention
         attn_out = self.transformer(x)

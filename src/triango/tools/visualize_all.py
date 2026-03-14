@@ -1,5 +1,5 @@
 import torch
-import torch
+
 from triango.env.constants import ROW_LENGTHS
 from triango.env.coords import flat_index, is_up
 from triango.env.pieces import STANDARD_PIECES

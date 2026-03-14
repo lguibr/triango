@@ -1,5 +1,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/numpy.h>
 #include "env.hpp"
 #include "mcts.hpp"
 
@@ -14,18 +15,32 @@ PYBIND11_MODULE(triango_ext, m) {
     // Expose the GameState class to Python
     py::class_<GameState>(m, "GameState")
         .def(py::init<>())
-        .def(py::init([](std::vector<int> pieces, const std::string& board_str, int score) {
-            return new GameState(pieces, GameState::string_to_board(board_str), score);
+        .def(py::init([](std::vector<int> pieces, py::array_t<uint8_t> board_bytes, int score) {
+            auto req = board_bytes.request();
+            std::vector<uint8_t> vec((uint8_t*)req.ptr, ((uint8_t*)req.ptr) + req.size);
+            return new GameState(pieces, GameState::bytes_to_board(vec), score);
         }))
         .def_readwrite("score", &GameState::score)
         .def_readwrite("available", &GameState::available)
         .def_readwrite("pieces_left", &GameState::pieces_left)
         .def_readwrite("terminal", &GameState::terminal)
+        .def_property_readonly("board_bytes", [](const GameState& state) {
+            auto vec = state.get_board_bytes();
+            // Allocate true Python-owned numpy array so C++ vector lifecycle dies safely
+            py::array_t<uint8_t> arr(vec.size());
+            py::buffer_info r = arr.request(true);
+            uint8_t* ptr = static_cast<uint8_t*>(r.ptr);
+            std::copy(vec.begin(), vec.end(), ptr);
+            return arr;
+        })
         .def_property_readonly("board", [](const GameState& state) {
-            // Converts C++ BitBoard to a long string binary representation, then converts to Python int
-            // to perfectly preserve precision
-            std::string binaryStr = state.board_to_string();
-            return py::module_::import("builtins").attr("int")(binaryStr, 2);
+            // Backwards compatibility for python tests looking for an integer map
+            // Note: BitBoard natively is uint64_t low & uint32_t hi.
+            // Python tests only assume max 64 bit integer currently due to older architecture 
+            // Better yet, just return the string since older python env relies on string/int mapping
+            // But state.board expects an integer for mask masking.
+            // We just return low bits.
+            return static_cast<uint64_t>(state.board.to_int()); 
         })
         .def("check_terminal", &GameState::check_terminal)
         .def("get_valid_moves", [](const GameState& state) {
@@ -58,8 +73,9 @@ PYBIND11_MODULE(triango_ext, m) {
                 m = move_obj.cast<std::pair<int, int>>();
             }
             // MCTS requires new independent Node trees.
-            // But we must NOT delete the GameState passed by Python unless Python relinquishes it.
-            return new Node(state, parent, m);
+            // Python passes a GameState it owns. We MUST clone it so Node owns its own copy and doesn't double-free the Python object!
+            GameState* cloned_state = new GameState(*state);
+            return new Node(cloned_state, parent, m);
         }), py::arg("state"), py::arg("parent") = nullptr, py::arg("move") = py::none())
         
         .def_readwrite("state", &Node::state, py::return_value_policy::reference)
@@ -69,15 +85,18 @@ PYBIND11_MODULE(triango_ext, m) {
         .def_readwrite("prior", &Node::prior)
         .def_property("virtual_loss", [](const Node& n) { return n.virtual_loss.load(); }, [](Node& n, int v) { n.virtual_loss.store(v); })
         .def_readwrite("expanded", &Node::expanded)
-        .def_readwrite("children", &Node::children, py::return_value_policy::reference)
+        .def_property_readonly("children", [](Node& n) {
+            return n.children;
+        }, py::return_value_policy::reference_internal)
         .def_property_readonly("move", [](const Node& n) -> py::object {
             if (n.move.first == -1) return py::none();
             return py::cast(n.move);
         })
         .def("puct", &Node::puct, py::arg("c_puct") = 1.5f)
-        .def("select_child", &Node::select_child, py::return_value_policy::reference)
-        .def("expand", &Node::expand, py::return_value_policy::reference)
-        .def("backpropagate", &Node::backpropagate, py::arg("reward"));
+        .def("select_child", &Node::select_child, py::return_value_policy::reference_internal)
+        .def("expand", &Node::expand, py::return_value_policy::reference_internal)
+        .def("backpropagate", &Node::backpropagate, py::arg("reward"))
+        .def("apply_dirichlet_noise", &Node::apply_dirichlet_noise, py::arg("alpha"), py::arg("epsilon"));
 
 
     // Bind EvalRequest so Python can read it

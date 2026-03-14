@@ -26,6 +26,7 @@ struct Node {
     bool is_evaluating = false;
     
     std::mutex mtx; // Protects children and untried
+    std::vector<float> cached_policy;
 
     std::vector<Node*> children;
     std::vector<std::pair<int, int>> untried;
@@ -37,6 +38,7 @@ struct Node {
     Node* select_child();
     Node* expand();
     void backpropagate(float reward);
+    void apply_dirichlet_noise(float alpha, float epsilon);
 };
 
 struct EvalRequest {

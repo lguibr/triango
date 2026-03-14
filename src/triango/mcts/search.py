@@ -1,5 +1,4 @@
 
-import numpy as np
 import torch
 
 from triango.env.state import GameState
@@ -18,9 +17,7 @@ class PythonMCTS:
             return
         alpha = 10.0 / len(node.children) if len(node.children) > 0 else 0.3
         epsilon = 0.25
-        noise = np.random.dirichlet([alpha] * len(node.children))
-        for i, child in enumerate(node.children):
-            child.prior = (1.0 - epsilon) * child.prior + epsilon * noise[i]
+        node.apply_dirichlet_noise(alpha, epsilon)
 
     def search(
         self, root_state: GameState, simulations: int = 100
@@ -43,8 +40,7 @@ class PythonMCTS:
         # To satisfy strict Mypy checks, we must not reassign `root_state` to a different type.
         cpp_root_state: CppGameState
         if not isinstance(root_state, CppGameState):
-            board_str = bin(root_state.board)[2:].zfill(96)
-            cpp_root_state = CppGameState(root_state.available, board_str, root_state.score)
+            cpp_root_state = CppGameState(root_state.available, root_state.board_bytes, root_state.score)
         else:
             cpp_root_state = root_state
 
@@ -91,6 +87,10 @@ class PythonMCTS:
         # 4. Same output parsing as classic synchronous MCTS
         root = manager.root
         
+        # Apply dirichlet noise to root just dynamically before policy aggregation if needed
+        # It's better to do it earlier natively or as long as visits/scores process it
+        # Actually Dirichlet Noise logic is for Training, not inference! 
+        # Here we just parse visits.
         visits: dict[tuple[int, int], int] = {}
         for child in root.children:
             if child.move is not None:

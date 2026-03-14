@@ -4,7 +4,7 @@ from triango.env.state import GameState
 from triango.mcts.features import extract_feature
 
 
-def test_visualize_representation():
+def test_visualize_representation() -> None:
     """
     User requested an easy way to inspect and understand exactly what the 
     AI representation generates for debugging.

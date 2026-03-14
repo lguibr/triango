@@ -363,24 +363,28 @@ void GameState::refill_tray() {
     check_terminal();
 }
 
-// Convert board to pure Python-friendly bit string string avoiding numeric overflow boundaries
-std::string GameState::board_to_string() const {
-    std::string s(TOTAL_TRIANGLES, '0');
-    for (int i = 0; i < TOTAL_TRIANGLES; ++i) {
-        if (board.get_bit(i)) {
-            s[TOTAL_TRIANGLES - 1 - i] = '1'; // Python style, least significant bit at end
-        }
+// Convert board to pure 12-byte packed format (96 bits) to avoid string overhead
+std::vector<uint8_t> GameState::get_board_bytes() const {
+    std::vector<uint8_t> bytes(12, 0);
+    // board.lo has 64 bits, board.hi has 32 bits (since totality is 96)
+    for (int i = 0; i < 8; ++i) {
+        bytes[i] = (board.lo >> (i * 8)) & 0xFF;
     }
-    return s;
+    for (int i = 0; i < 4; ++i) {
+        bytes[8 + i] = (board.hi >> (i * 8)) & 0xFF;
+    }
+    return bytes;
 }
 
-BitBoard GameState::string_to_board(const std::string& s) {
-    BitBoard b;
-    int len = s.length();
-    for (int i = 0; i < len; ++i) {
-        if (s[len - 1 - i] == '1') {
-            b.set_bit(i);
-        }
+BitBoard GameState::bytes_to_board(const std::vector<uint8_t>& bytes) {
+    BitBoard b(0, 0);
+    if (bytes.size() != 12) return b;
+    
+    for (int i = 0; i < 8; ++i) {
+        b.lo |= (static_cast<uint64_t>(bytes[i]) << (i * 8));
+    }
+    for (int i = 0; i < 4; ++i) {
+        b.hi |= (static_cast<uint64_t>(bytes[8 + i]) << (i * 8));
     }
     return b;
 }
