@@ -1,5 +1,6 @@
 from triango.env.pieces import get_piece_overlay, get_valid_placement_mask
 
+
 def test_piece_overlay_invalid():
     res = get_piece_overlay(-1)
     assert all(x == 0 for x in res)

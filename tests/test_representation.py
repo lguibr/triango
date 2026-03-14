@@ -1,8 +1,8 @@
-import torch
+from triango.env.constants import ROW_LENGTHS
+from triango.env.coords import flat_index, is_up
 from triango.env.state import GameState
 from triango.mcts.features import extract_feature
-from triango.env.constants import ROW_LENGTHS
-from triango.env.coords import is_up, flat_index
+
 
 def test_visualize_representation():
     """

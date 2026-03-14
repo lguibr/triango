@@ -129,7 +129,11 @@ void AsyncMCTS::start() {
 }
 
 void AsyncMCTS::stop() {
-    is_running = false;
+    {
+        std::lock_guard<std::mutex> lock(request_mtx);
+        is_running = false;
+        simulations_completed = target_simulations; // forcefully satisfy exit condition
+    }
     request_cv.notify_all();
     result_cv.notify_all();
     for (auto& t : threads) {
@@ -186,7 +190,10 @@ void AsyncMCTS::worker_loop() {
             node->backpropagate(node->state->score);
         }
         
-        simulations_completed++;
+        int current_sims = ++simulations_completed;
+        if (current_sims >= target_simulations) {
+            request_cv.notify_all();
+        }
     }
 }
 
@@ -220,7 +227,10 @@ void AsyncMCTS::submit_results(const std::vector<EvalResult>& results) {
         }
 
         node->backpropagate(res.value);
-        simulations_completed++; 
+        int current_sims = ++simulations_completed; 
+        if (current_sims >= target_simulations) {
+            request_cv.notify_all();
+        }
     }
 }
 

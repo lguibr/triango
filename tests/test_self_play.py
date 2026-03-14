@@ -1,10 +1,12 @@
+from unittest.mock import MagicMock, patch
+
 import torch
-from unittest.mock import patch, MagicMock
-from triango.training.self_play import play_one_game, play_one_game_worker, self_play
+
 from triango.env.state import GameState
 from triango.mcts.search import PythonMCTS
 from triango.training.buffer import ReplayBuffer
-import numpy as np
+from triango.training.self_play import play_one_game, play_one_game_worker, self_play
+
 
 def test_play_one_game():
     model = MagicMock()
@@ -58,11 +60,12 @@ def test_self_play():
         # Mock Pool
         mock_pool = MagicMock()
         mock_ctx.return_value.Pool.return_value.__enter__.return_value = mock_pool
+        import numpy as np
         # Give mock results
-        dummy_policy = torch.zeros(3, 50)
-        mock_pool.map.return_value = [
-            ([ (torch.zeros(7, 96), 0.0, 5.0, dummy_policy) ], 5.0),
-            ([ (torch.zeros(7, 96), 0.0, 1.0, dummy_policy) ], 1.0),
+        dummy_policy = np.zeros((3, 50), dtype=np.float32)
+        mock_pool.imap_unordered.return_value = [
+            ([ (np.zeros((7, 96), dtype=np.float32), 5.0, dummy_policy) ], 5.0),
+            ([ (np.zeros((7, 96), dtype=np.float32), 1.0, dummy_policy) ], 1.0),
         ]
         
         buf, scores = self_play(model, buffer, hw_config)

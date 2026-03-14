@@ -13,14 +13,13 @@ from triango.training.buffer import ReplayBuffer
 
 def play_one_game(
     game_idx: int, mcts: PythonMCTS, simulations: int, num_games: int
-) -> tuple[list[tuple[torch.Tensor, float, float, torch.Tensor]], float]:
+) -> tuple[list[tuple[np.ndarray[Any, Any], float, np.ndarray[Any, Any]]], float]:
     state = GameState()
-    game_history: list[tuple[torch.Tensor, float, float, torch.Tensor]] = []
-
-    print(f"--- Game {game_idx+1}/{num_games} Started ---")
+    game_history: list[tuple[np.ndarray[Any, Any], float, np.ndarray[Any, Any]]] = []
 
     step = 0
-    while True:
+    # Hard cap 10,000 steps to prevent practically infinite games from halting the epoch
+    for step in range(10000):
         if state.pieces_left == 0:
             state.refill_tray()
             
@@ -38,11 +37,15 @@ def play_one_game(
         counts = np.array([visits[m] for m in moves], dtype=np.float64)
 
         probs = counts ** (1.0 / temp)
-        probs = probs / np.sum(probs)
+        probs_sum = np.sum(probs)
+        if probs_sum == 0:
+            probs = np.ones_like(probs) / len(probs)
+        else:
+            probs = probs / probs_sum
         
         # Build full target policy matrix [3, 50]
         # Map each legal (slot, orientation_idx) to its MCTS visitation probability
-        target_policy_mat = torch.zeros(3, 50, dtype=torch.float32)
+        target_policy_mat = np.zeros((3, 50), dtype=np.float32)
         for idx_m, m in enumerate(moves):
             slot, o_idx = m
             # clip to bounds just in case
@@ -53,29 +56,24 @@ def play_one_game(
 
         slot, idx = chosen_move
 
-        board_before = state.board
-
         next_state = state.apply_move(slot, idx)
         if next_state is None:
             break
         state = next_state
 
-        pop_before = bin(board_before).count("1")
-        pop_after = bin(state.board).count("1")
-        cleared_line = 1.0 if pop_after <= pop_before else 0.0
-
         feat = extract_feature(state)
-        game_history.append((feat.clone().detach(), cleared_line, float(state.score), target_policy_mat))
+        game_history.append((feat.cpu().numpy(), float(state.score), target_policy_mat))
 
         step += 1
-
-    print(f"Game {game_idx+1} Finished. Steps: {step}, Final Score: {state.score}")
+    else:
+        print(f"Warning: Game {game_idx} hit maximum depth cutoff (10000 steps). Terminating early.")
+        
     return game_history, float(state.score)
 
 
 def play_one_game_worker(
     args: tuple[int, dict[str, Any] | None, dict[str, Any]],
-) -> tuple[list[tuple[torch.Tensor, float, float, torch.Tensor]], float]:
+) -> tuple[list[tuple[np.ndarray[Any, Any], float, np.ndarray[Any, Any]]], float]:
     try:
         import torch
 
@@ -108,6 +106,8 @@ def play_one_game_worker(
 def self_play(
     model: AlphaZeroNet, buffer: ReplayBuffer, hw_config: dict[str, Any]
 ) -> tuple[ReplayBuffer, list[float]]:
+    import sys
+    
     context = mp.get_context("spawn")
     num_games = hw_config["num_games"]
 
@@ -123,25 +123,55 @@ def self_play(
 
     num_processes = hw_config["num_processes"]
     print(
-        f"Spawning {num_processes} concurrent workers targeting '{hw_config['worker_device'].type}' for self-play generation..."
+        f"Spawning {num_processes} concurrent workers targeting '{hw_config['worker_device'].type}' for {num_games} games..."
     )
-    # Add a fallback just incase MacOS hangs gracefully
+    
+    completed_games = 0
+    running_scores = []
+    
     try:
         with context.Pool(processes=num_processes) as pool:
-            results = pool.map(play_one_game_worker, args)
+            # We use imap_unordered to get results as they finish to update the progress bar live
+            for history, final_score in pool.imap_unordered(play_one_game_worker, args):
+                results.append((history, final_score))
+                running_scores.append(final_score)
+                completed_games += 1
+                
+                # Live Analytics
+                curr_med = np.median(running_scores)
+                curr_max = max(running_scores)
+                curr_min = min(running_scores)
+                curr_mean = np.mean(running_scores)
+                
+                # Build Progress Bar string
+                pct = int((completed_games / num_games) * 20)
+                try:
+                    bar = "█" * pct + "-" * (20 - pct)
+                    sys.stdout.write(
+                        f"\r[{bar}] {completed_games}/{num_games} | "
+                        f"Med: {curr_med:.1f} | Avg: {curr_mean:.1f} | Max: {curr_max:.1f} | Min: {curr_min:.1f}   "
+                    )
+                    sys.stdout.flush()
+                except UnicodeEncodeError:
+                    bar = "#" * pct + "-" * (20 - pct)
+                    sys.stdout.write(
+                        f"\r[{bar}] {completed_games}/{num_games} | "
+                        f"Med: {curr_med:.1f} | Avg: {curr_mean:.1f} | Max: {curr_max:.1f} | Min: {curr_min:.1f}   "
+                    )
+                    sys.stdout.flush()
+                
+            print() # Newline after progress bar finishes
     except RuntimeError as e:
-        print(f"Multiprocessing error (likely MPS collision): {e}")
+        print(f"\nMultiprocessing error: {e}")
         return buffer, []
 
     scores = [res[1] for res in results]
-    median_score = float(np.median(scores)) if scores else 0.0
-    print(
-        f"Self-Play Median Score: {median_score:.1f}, Max Score: {max(scores) if scores else 0.0}"
-    )
-    top_quartile = float(np.percentile(scores, 75)) if scores else 0.0
-    max_score = max(scores) if scores else 0.0
-
-    for history, final_score in results:
-        buffer.push_game(history, final_score)
+    
+    for history_np, final_score in results:
+        history_tensor = [
+            (torch.from_numpy(f), s, torch.from_numpy(p))
+            for f, s, p in history_np
+        ]
+        buffer.push_game(history_tensor, final_score)
 
     return buffer, scores

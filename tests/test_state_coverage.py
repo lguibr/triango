@@ -1,5 +1,5 @@
 from triango.env.state import GameState
-from triango.env.pieces import STANDARD_PIECES_DEFS
+
 
 def test_state_render(capsys):
     state = GameState(pieces=[0, 1, 2], score=42, board=1)

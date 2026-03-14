@@ -1,9 +1,9 @@
-import sys
-from triango.env.pieces import STANDARD_PIECES_DEFS, STANDARD_PIECES, get_piece_overlay, get_valid_placement_mask
-from triango.env.state import GameState
 from triango.env.constants import ROW_LENGTHS
-from triango.env.coords import is_up, flat_index
+from triango.env.coords import flat_index, is_up
+from triango.env.pieces import STANDARD_PIECES
+from triango.env.state import GameState
 from triango.mcts.features import extract_feature
+
 
 def visualize_all_shapes_and_features():
     output_lines = []
@@ -17,9 +17,9 @@ def visualize_all_shapes_and_features():
     output_lines.append("interprets this feature structurally across its 7 Channels.\n")
     
     for p_id in range(12):
-        output_lines.append(f"\n#########################################################")
+        output_lines.append("\n#########################################################")
         output_lines.append(f"                SHAPE ID {p_id}")
-        output_lines.append(f"#########################################################")
+        output_lines.append("#########################################################")
         
         state = GameState(pieces=[p_id, -1, -1], board=0, score=0)
         

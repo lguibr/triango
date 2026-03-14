@@ -1,6 +1,7 @@
-import os
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
+
 from triango.main import main
+
 
 @patch('triango.main.self_play')
 @patch('triango.main.train')
@@ -12,7 +13,7 @@ def test_main_execution(mock_exists, mock_load, mock_train, mock_self_play):
     from triango.training.buffer import ReplayBuffer
     dummy_buffer = ReplayBuffer(10)
     import torch
-    dummy_buffer.push_game([(torch.zeros(7, 96), 1.0, 1.0, torch.zeros(3, 50))], 10.0)
+    dummy_buffer.push_game([(torch.zeros(7, 96), 1.0, torch.zeros(3, 50))], 10.0)
     
     mock_self_play.side_effect = [(dummy_buffer, [10.0, 15.0]), Exception("Break Loop")]
     
@@ -38,6 +39,7 @@ def test_main_execution(mock_exists, mock_load, mock_train, mock_self_play):
 def test_main_checkpoint(mock_train, mock_self_play):
     with patch('triango.main.get_hardware_config') as mock_hw:
         import torch
+
         from triango.training.buffer import ReplayBuffer
         
         # Raise an exception on the second call to break the loop early 

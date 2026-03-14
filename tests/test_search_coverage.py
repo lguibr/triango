@@ -1,9 +1,10 @@
+
 import torch
-import numpy as np
+
+from triango.env.state import GameState
 from triango.mcts.node import Node
 from triango.mcts.search import PythonMCTS
-from triango.env.state import GameState
-from unittest.mock import patch, MagicMock
+
 
 def test_puct():
     state = GameState()
@@ -42,7 +43,7 @@ def test_mcts_search():
     class MockModel(torch.nn.Module):
         def forward(self, x):
             batch_size = x.size(0)
-            return torch.zeros(batch_size, 1), torch.zeros(batch_size, 1), torch.zeros(batch_size, 3, 50)
+            return torch.zeros(batch_size, 1), torch.zeros(batch_size, 3, 50)
             
     model = MockModel()
     mcts = PythonMCTS(model, torch.device('cpu'), batch_size=2)

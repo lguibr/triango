@@ -1,6 +1,7 @@
-import torch
 from unittest.mock import patch
+
 from triango.config import get_hardware_config
+
 
 def test_get_hardware_config_cuda():
     with patch('torch.cuda.is_available', return_value=True):

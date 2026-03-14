@@ -1,7 +1,11 @@
 
+import warnings
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+warnings.filterwarnings("ignore", message=".*enable_nested_tensor is True.*")
 
 
 class AlphaZeroNet(nn.Module):
@@ -15,7 +19,7 @@ class AlphaZeroNet(nn.Module):
     - The model no longer outputs a 96-discrete probability map.
     - Instead it evaluates an "After-State" (board after piece is placed).
     - It explicitly "sees" the shapes via Spatial Overlays (Channels 1-3).
-    - Outputs `(Value, Line_Clear_Probability)`.
+    - Outputs `(Value, Policy)`.
     """
 
     def __init__(self, d_model: int = 256, nhead: int = 16, num_layers: int = 12):
@@ -46,16 +50,13 @@ class AlphaZeroNet(nn.Module):
         self.value_norm = nn.LayerNorm(64)
         self.value_fc2 = nn.Linear(64, 1)
 
-        # Auxiliary Line Clear Head: Predicts probability of creating a line clear [0.0, 1.0]
-        self.line_clear_fc = nn.Linear(64, 1)
-
         # Policy Head: Predicts action probabilities directly to speed up MCTS.
         # Outputs [Batch, 3, 50] representing probabilities across 3 tray slots & 50 discrete orientations
         self.policy_fc1 = nn.Linear(d_model, 128)
         self.policy_norm = nn.LayerNorm(128)
         self.policy_fc2 = nn.Linear(128, 3 * 50)
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         # x shape: [Batch, 7, 96]
         # Transformers require sequence-centric shapes: [Batch, SequenceLength=96, EmbedSize=7]
         x = x.transpose(1, 2).contiguous()
@@ -81,12 +82,9 @@ class AlphaZeroNet(nn.Module):
         # Raw Value Expectation
         value = self.value_fc2(v)
 
-        # Probability of clearing lines
-        line_clear_prob = torch.sigmoid(self.line_clear_fc(v))
-
         # Policy computation (predicts prior directly to narrow MCTS without full rollouts!)
         p = F.mish(self.policy_norm(self.policy_fc1(v_pooled)))
         policy_logits = self.policy_fc2(p).view(batch_size, 3, 50)
         policy_probs = F.softmax(policy_logits.view(batch_size, -1), dim=-1).view(batch_size, 3, 50)
 
-        return value, line_clear_prob, policy_probs
+        return value, policy_probs

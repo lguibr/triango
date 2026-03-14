@@ -1,6 +1,6 @@
-import torch
-from triango.mcts.node import Node
 from triango.env.state import GameState
+from triango.mcts.node import Node
+
 
 def test_node_initialization():
     state = GameState()

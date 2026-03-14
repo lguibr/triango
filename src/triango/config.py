@@ -8,23 +8,30 @@ def get_hardware_config() -> dict[str, Any]:
     """
     Dynamically determines the maximum safe hyper-parameters based on the executing environment.
     Optimizes for RTX 3080 Ti locally while retaining safe limits for Apple Silicon (MPS).
+    
+    *** TINY TESTING MODEL (For quick architecture validation and debugging) ***
+    To quickly verify if the AI is learning without waiting hours, use this ultra-light config:
+        "d_model": 32, "nhead": 2, "num_layers": 2
+        "num_games": 32, "simulations": 50, "train_epochs": 1
+    This speeds up iteration times drastically, allowing you to observe rapid loss convergence.
     """
     if torch.cuda.is_available():
         # Windows / Linux - NVIDIA RTX Ecosystem
         # Expected baseline: RTX 3080 Ti Laptop GPU (16GB VRAM), 20 CPU threads.
         return {
             "device": torch.device("cuda"),
-            "model_checkpoint": "models/best_model_python.pth",
-            "metrics_file": "models/metrics.json",
-            "d_model": 512,  # Large Transformer
-            "nhead": 8,
-            "num_layers": 8,
-            "capacity": 500000,
-            "num_games": 256,          # Scale up Game Generation locally 
-            "simulations": 2046,
-            "self_play_batch_size": 256,
-            "train_batch_size": 2048,  # Scale up PyTorch Batch optimization targets
-            "train_epochs": 20,        # Squeeze max gradient loss out of the Elite sequences
+            "model_checkpoint": "models/best_model_v2_python.pth",
+            "metrics_file": "models/metrics_v2.json",
+            "d_model": 64,  # Small Fast Transformer
+            "nhead": 4,
+            "num_layers": 4,
+            "capacity": 250000,
+            "num_games": 2048,          # Scale up Game Generation locally 
+            "simulations": 64,
+            "self_play_batch_size": 1024,
+            "train_batch_size": 1024,  # Scale up PyTorch Batch optimization targets
+            "train_epochs": 4,      
+            # Squeeze max gradient loss out of the Elite sequences
             "num_processes": max(4, multiprocessing.cpu_count() - 2),  # Unleash full CPU cores!
             "worker_device": torch.device("cuda"),  # Run MCTS heavily on GPU
         }

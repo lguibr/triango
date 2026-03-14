@@ -50,36 +50,39 @@ class PythonMCTS:
         manager.start()
 
         # 2. Polling Loop
-        while not manager.is_done():
-            # Attempt to pull up to batch_size states simultaneously
-            requests = manager.get_requests(self.batch_size)
-            if not requests:
-                continue
+        import time
+        try:
+            while not manager.is_done():
+                # Attempt to pull up to batch_size states simultaneously
+                requests = manager.get_requests(self.batch_size)
+                if not requests:
+                    time.sleep(0.001)
+                    continue
 
-            # Batch them immediately together
-            batch_tensors = []
-            for req in requests:
-                batch_tensors.append(extract_feature(req.state))
-            
-            x = torch.stack(batch_tensors).to(self.device)
-            
-            with torch.no_grad():
-                pred_rem_scores, _, policy_probs = self.model(x)
-                pred_rem_scores = pred_rem_scores.cpu().numpy().flatten() * 100.0
-                policy_probs = policy_probs.cpu().numpy()
-            
-            # Repackage the evaluations back into C++ Result payloads
-            results = []
-            for i, req in enumerate(requests):
-                # The neural net predicts *remaining* score, so total value = current score + predicted remaining
-                v_scalar = float(req.state.score + pred_rem_scores[i])
-                p_array = policy_probs[i].flatten().tolist()
-                results.append(EvalResult(node=req.node, value=v_scalar, policy=p_array))
+                # Batch them immediately together
+                batch_tensors = []
+                for req in requests:
+                    batch_tensors.append(extract_feature(req.state))
+                
+                x = torch.stack(batch_tensors).to(self.device)
+                
+                with torch.no_grad():
+                    pred_rem_scores, policy_probs = self.model(x)
+                    pred_rem_scores = pred_rem_scores.cpu().numpy().flatten() * 100.0
+                    policy_probs = policy_probs.cpu().numpy()
+                
+                # Repackage the evaluations back into C++ Result payloads
+                results = []
+                for i, req in enumerate(requests):
+                    # The neural net predicts *remaining* score, so total value = current score + predicted remaining
+                    v_scalar = float(req.state.score + pred_rem_scores[i])
+                    p_array = policy_probs[i].flatten().tolist()
+                    results.append(EvalResult(node=req.node, value=v_scalar, policy=p_array))
 
-            manager.submit_results(results)
-
-        # 3. Clean Tree shutdown
-        manager.stop()
+                manager.submit_results(results)
+        finally:
+            # 3. Clean Tree shutdown
+            manager.stop()
         
         # 4. Same output parsing as classic synchronous MCTS
         root = manager.root

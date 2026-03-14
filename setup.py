@@ -1,7 +1,8 @@
-from setuptools import setup, Extension
-import pybind11
 import os
 import sys
+
+import pybind11
+from setuptools import Extension, setup
 
 extra_args = ["-std=c++17", "-O3"]
 if sys.platform == "win32":

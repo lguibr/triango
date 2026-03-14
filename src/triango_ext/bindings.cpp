@@ -28,6 +28,21 @@ PYBIND11_MODULE(triango_ext, m) {
             return py::module_::import("builtins").attr("int")(binaryStr, 2);
         })
         .def("check_terminal", &GameState::check_terminal)
+        .def("get_valid_moves", [](const GameState& state) {
+            std::vector<std::pair<int, int>> valid_moves;
+            if (state.terminal) return valid_moves;
+            for (int slot = 0; slot < 3; ++slot) {
+                int p_id = state.available[slot];
+                if (p_id == -1) continue;
+                for (int idx = 0; idx < 96; ++idx) {
+                    const BitBoard& mask = STANDARD_PIECES[p_id][idx];
+                    if (!mask.is_zero() && (state.board & mask).is_zero()) {
+                        valid_moves.push_back({slot, idx});
+                    }
+                }
+            }
+            return valid_moves;
+        })
         .def("apply_move", [](GameState& self, int slot, int index) {
             GameState* next_state = self.apply_move(slot, index);
             return next_state; // pybind11 automatically handles the pointer return for Python

@@ -1,9 +1,11 @@
 import torch
 import torch.optim as optim
-from triango.training.buffer import ReplayBuffer
+
 from triango.model.network import AlphaZeroNet
+from triango.training.buffer import ReplayBuffer
 from triango.training.self_play import self_play
 from triango.training.trainer import train
+
 
 def test_buffer():
     buf = ReplayBuffer(capacity=10, elite_ratio=0.5)
@@ -12,14 +14,14 @@ def test_buffer():
     dummy_policy = torch.zeros(3, 50)
     for i in range(15):
         # Push standard games (score 0 doesn't trigger elite)
-        buf.push_game([(torch.zeros(7, 96), 1.0, 0.0, dummy_policy)], 0.0)
+        buf.push_game([(torch.zeros(7, 96), 0.0, dummy_policy)], 0.0)
         
     for i in range(6):
         # Push elite games
-        buf.push_game([(torch.zeros(7, 96), 1.0, 100.0, dummy_policy)], 100.0)
+        buf.push_game([(torch.zeros(7, 96), 100.0, dummy_policy)], 100.0)
         
     assert len(buf) == 10 # 5 standard + 5 elite
-    state, val, lc, p = buf[0]
+    state, val, p = buf[0]
     assert state.shape == (7, 96)
     assert p.shape == (3, 50)
 
@@ -30,7 +32,7 @@ def test_training_loop():
     # Push dummy data
     dummy_policy = torch.zeros(3, 50)
     for _ in range(5):
-        buffer.push_game([(torch.zeros(7, 96), 1.0, 10.0, dummy_policy)], 10.0)
+        buffer.push_game([(torch.zeros(7, 96), 10.0, dummy_policy)], 10.0)
         
     hw_config = {
         'device': torch.device('cpu'),

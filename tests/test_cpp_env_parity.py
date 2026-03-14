@@ -1,4 +1,3 @@
-import pytest
 import triango_ext
 from triango.env.state import GameState as PyGameState
 

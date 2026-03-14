@@ -35,11 +35,20 @@ def main() -> None:
     checkpoint = hw_config["model_checkpoint"]
     if os.path.exists(str(checkpoint)):
         try:
-            model.load_state_dict(torch.load(str(checkpoint), map_location=device))
+            model.load_state_dict(torch.load(str(checkpoint), map_location=device, weights_only=True), strict=False)
             print("Loaded checkpoint.")
         except Exception as e:
-            print(f"Failed to load checkpoint (likely architecture mismatch from upgrade): {e}")
+            print(f"Failed to load checkpoint (likely architecture mismatch from config change): {e}")
             print("=> Training from Tabula Rasa.")
+
+    metrics_file = hw_config["metrics_file"]
+    metrics = {}
+    if os.path.exists(str(metrics_file)):
+        with open(str(metrics_file)) as f:
+            try:
+                metrics = json.load(f)
+            except Exception:
+                pass
 
     ITERATIONS = 50 if device.type == "cuda" else 250
     for i in range(ITERATIONS):
@@ -52,15 +61,6 @@ def main() -> None:
         print(f"Self-play generated {len(buffer)} states in {time.time() - start:.2f}s")
 
         if scores:
-            metrics_file = hw_config["metrics_file"]
-            metrics = {}
-            if os.path.exists(str(metrics_file)):
-                with open(str(metrics_file)) as f:
-                    try:
-                        metrics = json.load(f)
-                    except Exception:
-                        pass
-
             iter_key = f"iteration_{i+1}"
             best_score = max(scores)
             median_score = float(np.median(scores))
@@ -88,10 +88,10 @@ def main() -> None:
             # --- Evaluation Arena ---
             print("\nEntering Evaluation Arena...")
             arena_config = hw_config.copy()
-            arena_config["num_games"] = 10
+            arena_config["num_games"] = 128
             
             model.eval()
-            _, arena_scores = self_play(model, ReplayBuffer(capacity=10), arena_config)
+            _, arena_scores = self_play(model, ReplayBuffer(capacity=128), arena_config)
             
             arena_median = float(np.median(arena_scores)) if arena_scores else 0.0
             print(f"Arena Challenger achieved Median Score: {arena_median:.1f}")
@@ -99,22 +99,20 @@ def main() -> None:
             best_arena_score = metrics.get("best_arena_score", 0.0)
             
             if arena_median >= best_arena_score:
-                print(f"Challenger successfully defeated the Champion! ({arena_median:.1f} >= {best_arena_score:.1f})")
+                print(f"Challenger set new high-score! ({arena_median:.1f} >= {best_arena_score:.1f})")
                 metrics["best_arena_score"] = arena_median
                 with open(str(metrics_file), "w") as f:
                     json.dump(metrics, f, indent=2)
-                    
-                ckpt_dir = os.path.dirname(str(checkpoint))
-                if ckpt_dir:
-                    os.makedirs(ckpt_dir, exist_ok=True)
-                torch.save(model.state_dict(), str(checkpoint))
-                print("=> Saved SOTA PyTorch Model!")
             else:
-                print(f"Challenger failed to defeat the Champion ({arena_median:.1f} < {best_arena_score:.1f}). Discarding weights.")
-                # Reload champion weights to prevent catastrophic forgetting
-                if os.path.exists(str(checkpoint)):
-                    model.load_state_dict(torch.load(str(checkpoint), map_location=device))
-                    print("=> Restored Champion PyTorch Model.")
+                print(f"Challenger scored lower than Champion ({arena_median:.1f} < {best_arena_score:.1f}).")
+                
+            # KataGo/MuZero modernization: always accept the newest weights to ensure continual exploration.
+            # Discarding weights guarantees the AI gets trapped in local-minimums!
+            ckpt_dir = os.path.dirname(str(checkpoint))
+            if ckpt_dir:
+                os.makedirs(ckpt_dir, exist_ok=True)
+            torch.save(model.state_dict(), str(checkpoint))
+            print("=> Saved Continuous PyTorch Model!")
 
 
 if __name__ == "__main__":

@@ -1,9 +1,12 @@
 import time
+
 import torch
-from triango.env.state import GameState
-from triango.model.network import AlphaZeroNet
-from triango.mcts.search import PythonMCTS
+
 import triango_ext
+from triango.env.state import GameState
+from triango.mcts.search import PythonMCTS
+from triango.model.network import AlphaZeroNet
+
 
 def run_benchmark():
     print("Initializing Environment...")
@@ -57,10 +60,10 @@ def run_benchmark():
     total_time = time.time() - start_time
     avg_sims_per_sec = total_sims / total_time
     
-    print(f"\n--- RESULTS ---")
+    print("\n--- RESULTS ---")
     print(f"Total Time for {num_moves} moves ({total_sims} simulations): {total_time:.4f}s")
     print(f"Average Throughput: {avg_sims_per_sec:.2f} simulations/sec")
-    print(f"Previous Pure Python sync speeds were ~30-50 sims/sec on CPU.")
+    print("Previous Pure Python sync speeds were ~30-50 sims/sec on CPU.")
 
 if __name__ == "__main__":
     run_benchmark()

@@ -1,5 +1,6 @@
 from triango.env.state import GameState
 
+
 def test_initial_state():
     state = GameState()
     assert state.score == 0
@@ -12,7 +13,7 @@ def test_apply_move():
     state = GameState(pieces=[0, 1, 2], board=0, score=0)
     # Piece 0 is a 1-triangle piece requiring pointing UP at (0,0,0) offset
     # Let's find a valid placement from the mask using bitwise ops
-    from triango.env.pieces import STANDARD_PIECES_DEFS, STANDARD_PIECES
+    from triango.env.pieces import STANDARD_PIECES
     p0_masks = STANDARD_PIECES[0]
     first_valid_index = next(i for i, m in enumerate(p0_masks) if m != 0)
     
