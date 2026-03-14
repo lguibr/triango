@@ -29,6 +29,8 @@ class ReplayBuffer(Dataset[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]):
             state, target_value, target_policy = self.elite_buffer[elite_idx]
         else:
             std_idx = (idx // 2) if len(self.elite_buffer) > 0 else idx
+            # Wrap around safely to prevent IndexError if __len__ scaled strangely
+            std_idx = std_idx % len(self.buffer)
             state, target_value, target_policy = self.buffer[std_idx]
             
         return (

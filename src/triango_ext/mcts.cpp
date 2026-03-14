@@ -144,56 +144,67 @@ void AsyncMCTS::stop() {
 }
 
 void AsyncMCTS::worker_loop() {
-    while (is_running && simulations_completed < target_simulations) {
-        Node* node = root;
-        
-        // Selection
-        while (node->expanded) {
-            Node* next = node->select_child();
-            if (!next) {
-                break;
-            }
-            node->virtual_loss++; 
-            node = next;
-        }
-
-        // Expansion
-        if (!node->state->terminal && !node->expanded) {
-            node->virtual_loss++; // Virtual loss on parent leaf
-            Node* child = node->expand();
+    try {
+        while (is_running && simulations_completed < target_simulations) {
+            Node* node = root;
             
-            // If expand returned a new child, we queue it for evaluation
-            if (child != node) {
-                child->virtual_loss++;
-                
-                // Submit to Python queue
-                {
-                    std::lock_guard<std::mutex> lock(request_mtx);
-                    request_queue.push({child, *(child->state)});
+            // Selection
+            while (node->expanded) {
+                Node* next = node->select_child();
+                if (!next) {
+                    break;
                 }
-                request_cv.notify_one();
+                node->virtual_loss++; 
+                node = next;
+            }
 
-                // Wait for Python to process and set evaluating flag to false
-                // Wait, if it's queued, this thread must wait for the exact result
-                // Actually, KataGo style: Thread yields immediately and selects ANOTHER path from the root.
-                // We do NOT block the thread waiting.
-                // But if we don't block the thread, the thread goes back to root!
-                continue; // Thread immediately loops. Python handles backprop via submit_results!
+            // Expansion
+            if (!node->state->terminal && !node->expanded) {
+                node->virtual_loss++; // Virtual loss on parent leaf
+                Node* child = node->expand();
+                
+                // If expand returned a new child, we queue it for evaluation
+                if (child != node) {
+                    child->virtual_loss++;
+                    
+                    // Submit to Python queue
+                    {
+                        std::lock_guard<std::mutex> lock(request_mtx);
+                        request_queue.push({child, *(child->state)});
+                    }
+                    request_cv.notify_one();
+
+                    // Wait for Python to process and set evaluating flag to false
+                    // Wait, if it's queued, this thread must wait for the exact result
+                    // Actually, KataGo style: Thread yields immediately and selects ANOTHER path from the root.
+                    // We do NOT block the thread waiting.
+                    // But if we don't block the thread, the thread goes back to root!
+                    continue; // Thread immediately loops. Python handles backprop via submit_results!
+                } else {
+                    // Leaf couldn't be expanded (e.g. terminal discovered dynamically)
+                    // node->virtual_loss++ was just called. backpropagate will decrement it.
+                    node->backpropagate(node->state->score);
+                }
             } else {
-                // Leaf couldn't be expanded (e.g. terminal discovered dynamically)
-                node->virtual_loss--;
+                // Terminal node
+                // node->virtual_loss was NEVER incremented here! Because we skipped the node->virtual_loss++ in expansion block.
+                // But backpropagate WILL decrement it! So we MUST increment it first to balance!
+                node->virtual_loss++;
                 node->backpropagate(node->state->score);
             }
-        } else {
-            // Terminal node
-            node->virtual_loss--;
-            node->backpropagate(node->state->score);
+            
+            int current_sims = ++simulations_completed;
+            if (current_sims >= target_simulations) {
+                request_cv.notify_all();
+            }
         }
-        
-        int current_sims = ++simulations_completed;
-        if (current_sims >= target_simulations) {
-            request_cv.notify_all();
+    } catch (...) {
+        {
+            std::lock_guard<std::mutex> lock(request_mtx);
+            worker_exception = std::current_exception();
+            is_running = false;
         }
+        request_cv.notify_all();
     }
 }
 
@@ -204,6 +215,10 @@ std::vector<EvalRequest> AsyncMCTS::get_requests(int max_batch) {
         return !request_queue.empty() || !is_running || simulations_completed >= target_simulations; 
     });
 
+    if (worker_exception) {
+        std::rethrow_exception(worker_exception);
+    }
+
     std::vector<EvalRequest> batch;
     while (!request_queue.empty() && batch.size() < max_batch) {
         batch.push_back(request_queue.front());
@@ -213,6 +228,10 @@ std::vector<EvalRequest> AsyncMCTS::get_requests(int max_batch) {
 }
 
 void AsyncMCTS::submit_results(const std::vector<EvalResult>& results) {
+    if (worker_exception) {
+        std::rethrow_exception(worker_exception);
+    }
+
     for (const auto& res : results) {
         Node* node = res.node;
         
@@ -235,5 +254,8 @@ void AsyncMCTS::submit_results(const std::vector<EvalResult>& results) {
 }
 
 bool AsyncMCTS::is_done() {
+    if (worker_exception) {
+        std::rethrow_exception(worker_exception);
+    }
     return simulations_completed >= target_simulations;
 }

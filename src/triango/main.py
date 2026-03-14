@@ -85,27 +85,6 @@ def main() -> None:
         if len(buffer) > 0:
             train(model, buffer, optimizer, scheduler, hw_config)
 
-            # --- Evaluation Arena ---
-            print("\nEntering Evaluation Arena...")
-            arena_config = hw_config.copy()
-            arena_config["num_games"] = 128
-            
-            model.eval()
-            _, arena_scores = self_play(model, ReplayBuffer(capacity=128), arena_config)
-            
-            arena_median = float(np.median(arena_scores)) if arena_scores else 0.0
-            print(f"Arena Challenger achieved Median Score: {arena_median:.1f}")
-            
-            best_arena_score = metrics.get("best_arena_score", 0.0)
-            
-            if arena_median >= best_arena_score:
-                print(f"Challenger set new high-score! ({arena_median:.1f} >= {best_arena_score:.1f})")
-                metrics["best_arena_score"] = arena_median
-                with open(str(metrics_file), "w") as f:
-                    json.dump(metrics, f, indent=2)
-            else:
-                print(f"Challenger scored lower than Champion ({arena_median:.1f} < {best_arena_score:.1f}).")
-                
             # KataGo/MuZero modernization: always accept the newest weights to ensure continual exploration.
             # Discarding weights guarantees the AI gets trapped in local-minimums!
             ckpt_dir = os.path.dirname(str(checkpoint))

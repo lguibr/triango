@@ -1,3 +1,5 @@
+import torch
+import torch
 from triango.env.constants import ROW_LENGTHS
 from triango.env.coords import flat_index, is_up
 from triango.env.pieces import STANDARD_PIECES
@@ -5,7 +7,7 @@ from triango.env.state import GameState
 from triango.mcts.features import extract_feature
 
 
-def visualize_all_shapes_and_features():
+def visualize_all_shapes_and_features() -> None:
     output_lines = []
     output_lines.append("=========================================================")
     output_lines.append("      TRIANGO AI REPRESENTATION VISUALIZER: ALL SHAPES   ")
@@ -78,7 +80,7 @@ def visualize_all_shapes_and_features():
     with open(r"C:\Users\lgui_\.gemini\antigravity\brain\df6a4141-bc22-4081-bb44-a9852c20aff5\feature_representation_guide.md", "w", encoding="utf-8") as f:
         f.write("\n".join(output_lines))
         
-def render_channel(tensor_channel):
+def render_channel(tensor_channel: torch.Tensor) -> list[str]:
     lines = []
     max_len = 15
     for r in range(8):

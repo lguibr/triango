@@ -4,6 +4,7 @@
 #include <vector>
 #include <cmath>
 #include <utility>
+#include <exception>
 #include <mutex>
 #include <atomic>
 #include <condition_variable>
@@ -70,6 +71,8 @@ public:
     std::queue<EvalResult> result_queue;
     std::mutex result_mtx;
     std::condition_variable result_cv;
+
+    std::exception_ptr worker_exception = nullptr;
 
     AsyncMCTS(GameState* root_state, int threads = 8, int sims = 800, float c_puct = 1.5f);
     ~AsyncMCTS();

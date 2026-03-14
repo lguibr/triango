@@ -40,13 +40,17 @@ class PythonMCTS:
         except Exception:
             pass
 
+        # To satisfy strict Mypy checks, we must not reassign `root_state` to a different type.
+        cpp_root_state: CppGameState
         if not isinstance(root_state, CppGameState):
             board_str = bin(root_state.board)[2:].zfill(96)
-            root_state = CppGameState(root_state.available, board_str, root_state.score)
+            cpp_root_state = CppGameState(root_state.available, board_str, root_state.score)
+        else:
+            cpp_root_state = root_state
 
         # 1. Initialize C++ Thread Manager
         # We use slightly fewer threads than batch_size to keep the queue healthy and GPU saturated
-        manager = AsyncMCTS(root_state, threads=32, sims=simulations, c_puct=1.5)
+        manager = AsyncMCTS(cpp_root_state, threads=32, sims=simulations, c_puct=1.5)
         manager.start()
 
         # 2. Polling Loop

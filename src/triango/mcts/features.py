@@ -5,7 +5,13 @@ from triango.env.pieces import get_piece_overlay, get_valid_placement_mask
 from triango.env.state import GameState
 
 
-def extract_feature(state: GameState) -> torch.Tensor:
+from typing import Union, TYPE_CHECKING, Any
+if TYPE_CHECKING:
+    from triango_ext import GameState as CppGameState
+else:
+    CppGameState = Any
+
+def extract_feature(state: Union[GameState, 'CppGameState', Any]) -> torch.Tensor:
     # Build a [7, 96] spatial tensor
     # Channel 0: Current Board
     # Channel 1: Geometry of piece in slot 0
